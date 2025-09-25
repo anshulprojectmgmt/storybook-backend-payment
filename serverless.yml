@@ -1,0 +1,51 @@
+# "org" ensures this Service is used with the correct Serverless Framework Access Key.
+org: sumitxorg
+# "service" is the name of this project. This will also be added to your AWS resource names.
+service: storybook-API
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: ap-south-1
+  httpApi:
+    cors:
+      allowedOrigins:
+        - "*"
+      allowedHeaders:
+        - Content-Type
+        - Authorization
+        - X-Amz-Date
+        - X-Api-Key
+        - X-Amz-Security-Token
+      allowCredentials: false
+      allowedMethods:
+        - OPTIONS
+        - GET
+        - POST
+        - PUT
+        - DELETE
+    
+  environment:
+    PROD_AWS_ACCESS_KEY_ID : ${env:PROD_AWS_ACCESS_KEY_ID}
+    PROD_AWS_SECRET_ACCESS_KEY : ${env:PROD_AWS_SECRET_ACCESS_KEY}
+    PROD_AWS_REGION : ${env:PROD_AWS_REGION}
+    PROD_AWS_S3_BUCKET_NAME : ${env:PROD_AWS_S3_BUCKET_NAME}
+    MONGODB_URI : ${env:MONGODB_URI}
+    MAIL_USER: ${env:MAIL_USER}
+    MAIL_PASS: ${env:MAIL_PASS}
+
+    
+    
+functions:
+  api:
+    handler: handler.handler
+    timeout: 30
+    events:
+      - httpApi: "*"
+     
+
+
+plugins:
+  - serverless-offline
+  - serverless-dotenv-plugin
+
