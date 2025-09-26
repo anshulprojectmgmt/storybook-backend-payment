@@ -33,6 +33,7 @@ provider:
     MONGODB_URI : ${env:MONGODB_URI}
     MAIL_USER: ${env:MAIL_USER}
     MAIL_PASS: ${env:MAIL_PASS}
+    REMAKER_API_KEY: ${env:REMAKER_API_KEY}
 
     
     
