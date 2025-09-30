@@ -40,7 +40,7 @@ provider:
 functions:
   api:
     handler: handler.handler
-    timeout: 30
+    timeout: 300
     events:
       - httpApi: "*"
      

@@ -146,7 +146,9 @@ export const getGeneratedImage = async (req, res) => {
     // console.log('body data for ai image generation:', bodyData);
 
     // get AI image for the provided scene and original images
-  // const aiImageDetails = await axios.post('https://i1u9iiq9h1.execute-api.ap-south-1.amazonaws.com/dev/generate',bodyData);
+  // const aiImageDetails = await axios.post('https://kdjpysy867.execute-api.ap-south-1.amazonaws.com/generate',bodyData);
+  //   res.status(200).json({...aiImageDetails.data, ok: true});
+
     //  **************************************************************************
 // *********** pranitha python lambda call END ********************
 
@@ -188,7 +190,6 @@ export const getGeneratedImage = async (req, res) => {
     }
 
     // create a record for aikidImageModel before returning
-
     await AiKidImageModel.insertOne({
       req_id,
       job_id: data.result.job_id,
@@ -217,6 +218,30 @@ export const getGeneratedImage = async (req, res) => {
         try {
           const result = await pollFaceSwap(jobId);
           if (result && result.code === 100000) {
+            // first we have to store image gets from output_image_url into s3 abd pass s3 url to db
+            // Download the image locally first
+            const response = await fetch(result.result.output_image_url[0]);
+            const arrayBuffer = await response.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            const localFileName = `ai_result_${jobId}.jpg`;
+            const localFilePath = path.join("/tmp", localFileName);
+            fs.writeFileSync(localFilePath, buffer);
+
+            // Upload to S3 using the same approach as storeOriginalImageToS3
+            const s3Key = `ai_generated_images/${localFileName}`;
+            let uploadResult;
+            try {
+              uploadResult = await uploadLocalFileToS3(localFilePath, s3Key, "image/jpeg");
+            } catch (uploadErr) {
+              console.error("Failed uploading generated image to S3:", uploadErr);
+              // cleanup local file then schedule retry
+              try { fs.unlinkSync(localFilePath); } catch(e){ /* ignore */ }
+              return pollWithBackoff(attempt + 1);
+            }
+
+            const s3Url = uploadResult.Location;
+           
+           
             // Update DB record with final status and image urls
             try {
               await AiKidImageModel.updateOne(
@@ -224,7 +249,7 @@ export const getGeneratedImage = async (req, res) => {
                 {
                   $set: {
                     status: "completed",
-                    image_urls: result.result.output_image_url || null,
+                    image_urls: [s3Url] || null,
                     updated_at: new Date(),
                   },
                 }
@@ -250,12 +275,25 @@ export const getGeneratedImage = async (req, res) => {
 
     return res.status(200).json({ job_id: data.result.job_id, ok: true });
 
-    // res.status(200).json({...aiImageDetails.data, ok: true,});
+    
   } catch (error) {
     console.error("Error generating image:", error);
     res.status(500).json({ error: "Failed to generate image", ok: false });
   }
 };
+
+/** upload a local file to S3 (same approach as storeOriginalImageToS3) */
+async function uploadLocalFileToS3(localFilePath, s3Key, contentType = "image/jpeg") {
+  const fileContent = fs.readFileSync(localFilePath);
+  const params = {
+    Bucket: process.env.PROD_AWS_S3_BUCKET_NAME,
+    Key: s3Key,
+    Body: fileContent,
+    ContentType: contentType,
+  };
+  const uploadResult = await s3.upload(params).promise();
+  return uploadResult; // { Location, Key, ... }
+}
 
 async function pollFaceSwap(jobId) {
   const resp = await fetch(
