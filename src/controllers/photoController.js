@@ -458,7 +458,7 @@ const sendMail = async (
       <p><strong>Questions?</strong></p>
       <p>If you have any questions or need further assistance, simply reply to this email. 
       We're here to help you craft a treasured keepsake for ${kidName}.</p>
-      <p>Warmest regards,<br>The Imagitime Team</p>
+      <p>Warmest regards,<br>The StoryBook Team</p>
     `;
 
     // 5. Send email
