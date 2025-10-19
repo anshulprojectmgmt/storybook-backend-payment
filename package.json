@@ -1,5 +1,5 @@
 {
-  "name": "storybook-API",
+  "name": "storybook-api",
   "version": "1.0.0",
   "description": "",
   "main": "handler.js",
@@ -22,8 +22,6 @@
     "serverless-http": "^3.2.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.10",
-    "serverless-dotenv-plugin": "^6.0.0",
-    "serverless-offline": "^14.4.0"
+    "nodemon": "^3.1.10"
   }
 }
