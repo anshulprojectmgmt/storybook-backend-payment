@@ -559,8 +559,17 @@ export const createParentAndSendMail = async (req, res) => {
       { upsert: true, new: true } // new: true returns the document
     );
 
+    // if (!notify) {
+    //   await sendMail(req_id, name, kidName, book_id, email, true);
+    // }
     if (!notify) {
-      await sendMail(req_id, name, kidName, book_id, email, true);
+      try {
+        await sendMail(req_id, name, kidName, book_id, email, true);
+      } catch (err) {
+        return res
+          .status(500)
+          .json({ message: "Email failed", error: err.message });
+      }
     }
 
     res
@@ -629,5 +638,6 @@ const sendMail = async (
     });
   } catch (error) {
     console.error("Error sending email:", error);
+    throw error;
   }
 };
