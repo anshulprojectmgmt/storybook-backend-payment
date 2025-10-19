@@ -1,0 +1,6 @@
+{
+  "watch": ["handler"],
+  "ext": "js,json",
+  "ignore": ["node_modules"],
+  "exec": "node handler.js"
+}

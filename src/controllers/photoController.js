@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 dotenv.config();
 import fs from "fs";
 import path from "path";
+import Jimp from "jimp";
 
 import KidPhotoModel from "../models/kidPhotoModel.js";
 import SceneModel from "../models/sceneModel.js";
@@ -35,10 +36,10 @@ async function fetchS3Buffer(s3Url) {
 }
 
 export const storeOriginalImageToS3 = async (req, res) => {
-    try {
-        if (!req.file) {
-            return res.status(400).json({ error: "No file uploaded" , ok: false});
-        }
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded", ok: false });
+    }
 
     // Read the file from disk
     // const filePath = path.join("uploads", req.file.filename);
@@ -53,10 +54,9 @@ export const storeOriginalImageToS3 = async (req, res) => {
     };
 
     const uploadResult = await s3.upload(params).promise();
-    console.log("File uploaded successfully:");
+    // console.log("File uploaded successfully:");
     // Optionally delete the file from disk after upload
     fs.unlinkSync(filePath);
-
     res.status(200).json({
       file_url: uploadResult.Location,
       upload_url: uploadResult.Key,
@@ -70,9 +70,7 @@ export const storeOriginalImageToS3 = async (req, res) => {
 
 export const add_photoToDB = async (req, res) => {
   try {
-    
     const { file_url, file_name, request_id } = req.body;
-
     const photoDetails = {
       file_url,
       file_name,
@@ -94,8 +92,122 @@ export const add_photoToDB = async (req, res) => {
   }
 };
 
+/**
+ * Takes an image buffer and adds caption text with translucent rounded background.
+ * Returns modified buffer (JPEG).
+ */
+async function addCaptionWithJimp(imageBuffer, captionText) {
+  const img = await Jimp.read(imageBuffer);
+  const font = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE);
+
+  const maxCharsPerLine = 40;
+  const lines = wrapText(captionText, maxCharsPerLine);
+
+  const lineHeights = [];
+  let textWidth = 0;
+  let textHeight = 0;
+
+  for (const line of lines) {
+    const width = Jimp.measureText(font, line);
+    const height = Jimp.measureTextHeight(font, line, 1000);
+    lineHeights.push(height);
+    textWidth = Math.max(textWidth, width);
+    textHeight += height + 10; //12
+  }
+
+  // const paddingX = 25;
+  const paddingY = 25;
+  // ✅ Define your margin from the bottom here
+  const marginBottom = 30; // Use a smaller number to move it down
+
+  // const x = (img.bitmap.width - textWidth) / 2;
+  const x = 0;
+  const y = img.bitmap.height - textHeight - marginBottom; //100 ,90
+  // ✅ Set the box's width to the full image width
+  const boxWidth = img.bitmap.width;
+  const boxHeight = textHeight + 2 * paddingY;
+
+  // background box
+  const box = new Jimp(
+    // textWidth + 2 * paddingX, //2
+    // textHeight + 2 * paddingY, //2
+    boxWidth,
+    boxHeight,
+    Jimp.rgbaToInt(0, 0, 0, 160)
+    // Jimp.rgbaToInt(75, 100, 255, 160)
+  );
+  // img.composite(box, x - paddingX, y - paddingY);
+  img.composite(box, x, y - paddingY);
+
+  // draw text lines
+  let currentY = y;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineWidth = Jimp.measureText(font, line);
+    const textX = (img.bitmap.width - lineWidth) / 2;
+    img.print(font, textX, currentY, line);
+    currentY += lineHeights[i] + 10; //15
+  }
+
+  return await img.getBufferAsync(Jimp.MIME_JPEG);
+}
+
+function wrapText(text, width) {
+  const words = text.split(" ");
+  const lines = [];
+  let line = "";
+  for (const word of words) {
+    if ((line + word).length > width) {
+      lines.push(line.trim());
+      line = "";
+    }
+    line += word + " ";
+  }
+  if (line) lines.push(line.trim());
+  return lines;
+}
+
+async function addMarginWithJimp(imageBuffer, marginSize, marginColor, side) {
+  const img = await Jimp.read(imageBuffer);
+  const { width: originalWidth, height: originalHeight } = img.bitmap;
+
+  let newWidth = originalWidth;
+  let newHeight = originalHeight;
+  let pasteX = 0;
+  let pasteY = 0;
+
+  // Calculate new dimensions and paste coordinates based on the side
+  if (side === "left") {
+    newWidth = originalWidth + marginSize;
+    pasteX = marginSize;
+  } else if (side === "right") {
+    newWidth = originalWidth + marginSize;
+  } else if (side === "top") {
+    newHeight = originalHeight + marginSize;
+    pasteY = marginSize;
+  } else if (side === "bottom") {
+    newHeight = originalHeight + marginSize;
+  } else {
+    throw new Error(
+      "Invalid side specified. Use 'top', 'bottom', 'left', or 'right'."
+    );
+  }
+
+  // Create a new blank canvas with the specified margin color
+  const canvas = new Jimp(newWidth, newHeight, marginColor);
+
+  // Paste the original image onto the new canvas at the correct offset
+  canvas.composite(img, pasteX, pasteY);
+
+  // Set JPEG quality to match the Python script's quality=95
+  canvas.quality(95);
+
+  // Return the final image as a buffer
+  return await canvas.getBufferAsync(Jimp.MIME_JPEG);
+}
+
 export const getGeneratedImage = async (req, res) => {
-  const { req_id, page_number, book_id } = req.query;
+  const { req_id, page_number, book_id, childName } = req.query;
 
   try {
     // memoization
@@ -132,27 +244,25 @@ export const getGeneratedImage = async (req, res) => {
       page_number: parseInt(page_number),
     });
 
-    const bodyData = {
-      original_image_urls_s3: originalImages.map((image) => image.file_url),
-      scene: sceneDetails.scene,
-      base_image_url: sceneDetails.sceneUrl || "",
-      prompt: sceneDetails.prompt,
-      req_id,
-      page_number: parseInt(page_number),
-      book_id,
-    };
-  
+    // const bodyData = {
+    //   original_image_urls_s3: originalImages.map((image) => image.file_url),
+    //   scene: sceneDetails.scene,
+    //   base_image_url: sceneDetails.sceneUrl || "",
+    //   prompt: sceneDetails.prompt,
+    //   req_id,
+    //   page_number: parseInt(page_number),
+    //   book_id,
+    // };
+
     // *********** pranitha python lambda call start ********************
     // console.log('body data for ai image generation:', bodyData);
 
     // get AI image for the provided scene and original images
-  // const aiImageDetails = await axios.post('https://kdjpysy867.execute-api.ap-south-1.amazonaws.com/generate',bodyData);
-  //   res.status(200).json({...aiImageDetails.data, ok: true});
+    // const aiImageDetails = await axios.post('https://kdjpysy867.execute-api.ap-south-1.amazonaws.com/generate',bodyData);
+    //   res.status(200).json({...aiImageDetails.data, ok: true});
 
     //  **************************************************************************
-// *********** pranitha python lambda call END ********************
-
-
+    // *********** pranitha python lambda call END ********************
 
     // Using Remaker API to generate image
     // https://remaker.ai/docs/api-reference/create-job
@@ -182,7 +292,7 @@ export const getGeneratedImage = async (req, res) => {
       },
     });
     const data = response.data;
-    
+
     if (data.code !== 100000) {
       return res
         .status(500)
@@ -201,81 +311,128 @@ export const getGeneratedImage = async (req, res) => {
       created_at: new Date(),
       updated_at: new Date(),
     });
-
+    // console.log("created the aikidImage Model");
     // invoke poll remaker and don't wait for it
     // Use a non-overlapping setTimeout-chain with exponential backoff to avoid
     // concurrent polls and to allow controlled retries/backoff.
     const jobId = data.result.job_id;
 
     (function pollWithBackoff(attempt = 0) {
-      // const baseDelayMs = 10000; // 10s
-      // const maxDelayMs = 5 * 60 * 1000; // 5 minutes
-      // const delay = Math.min(baseDelayMs * Math.pow(2, attempt), maxDelayMs);
       const delay = 15000; // fixed 15s interval
-      
 
       setTimeout(async () => {
+        // CORRECTED LOGIC STARTS HERE
         try {
           const result = await pollFaceSwap(jobId);
           if (result && result.code === 100000) {
-            // first we have to store image gets from output_image_url into s3 abd pass s3 url to db
-            // Download the image locally first
+            // 1. Download the initial image from Remaker
             const response = await fetch(result.result.output_image_url[0]);
             const arrayBuffer = await response.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
-            const localFileName = `ai_result_${jobId}.jpg`;
-            const localFilePath = path.join("/tmp", localFileName);
-            fs.writeFileSync(localFilePath, buffer);
+            const initialBuffer = Buffer.from(arrayBuffer); // Use a clear variable name
 
-            // Upload to S3 using the same approach as storeOriginalImageToS3
-            const s3Key = `ai_generated_images/${localFileName}`;
-            let uploadResult;
+            // 2. Add the caption
+            const sceneDetails = await SceneModel.findOne({
+              book_id,
+              page_number,
+            });
+            let captionText =
+              sceneDetails?.scene || "Your AI story caption here";
+            // replacing the {kid} with actual child name
+            captionText = captionText.replaceAll("{kid}", childName);
+            const captionedBuffer = await addCaptionWithJimp(
+              initialBuffer,
+              captionText
+            );
+
+            // 3. Upload the captioned image (Image 1)
+            // console.log("Uploading captioned image to S3...");
+            const captionFileName = `ai_result_${jobId}_caption.jpg`;
+            const captionS3Key = `ai_generated_images/${captionFileName}`;
+
+            // Save to a temporary local file for uploading
+            const captionLocalPath = path.join("/tmp", captionFileName);
+            fs.writeFileSync(captionLocalPath, captionedBuffer);
+
+            const uploadResultCaption = await uploadLocalFileToS3(
+              captionLocalPath,
+              captionS3Key,
+              "image/jpeg"
+            );
+            const s3UrlCaption = uploadResultCaption.Location; // Renamed to avoid confusion
+            // console.log("Uploaded captioned image:", s3UrlCaption);
+
+            // 4. Create the margin image from the captioned buffer
+            // console.log("Adding left margin to the image...");
+            // Determine which side the margin should be on.
+            const marginSide = page_number % 2 !== 0 ? "left" : "right";
+            // console.log(
+            //   `Page ${page_number} is ${
+            //     marginSide === "left" ? "ODD" : "EVEN"
+            //   }. Adding margin to the ${marginSide}.`
+            // );
+            const marginSize = 100;
+            const marginColor = "#FFFFFF";
+            const marginBuffer = await addMarginWithJimp(
+              captionedBuffer,
+              marginSize,
+              marginColor,
+              marginSide // Use the dynamic variable
+            );
+
+            // 5. Upload the margin image (Image 2)
+            // console.log("Uploading image with margin to S3...");
+            const marginFileName = `ai_result_${jobId}_margin.jpg`;
+            const marginS3Key = `ai_generated_images/${marginFileName}`;
+
+            // Save to another temporary local file
+            const marginLocalPath = path.join("/tmp", marginFileName);
+            fs.writeFileSync(marginLocalPath, marginBuffer);
+
+            const uploadResultMargin = await uploadLocalFileToS3(
+              marginLocalPath,
+              marginS3Key,
+              "image/jpeg"
+            );
+            const s3UrlWithMargin = uploadResultMargin.Location;
+            // console.log("Uploaded image with margin:", s3UrlWithMargin);
+
+            // 6. Update the database with BOTH URLs
+            // console.log("Updating database with both URLs...");
+            await AiKidImageModel.updateOne(
+              { job_id: jobId },
+              {
+                $set: {
+                  status: "completed",
+                  image_urls: [s3UrlCaption, s3UrlWithMargin], // Use both variables
+                  updated_at: new Date(),
+                },
+              }
+            );
+
+            // 7. Cleanup local files
             try {
-              uploadResult = await uploadLocalFileToS3(localFilePath, s3Key, "image/jpeg");
-            } catch (uploadErr) {
-              console.error("Failed uploading generated image to S3:", uploadErr);
-              // cleanup local file then schedule retry
-              try { fs.unlinkSync(localFilePath); } catch(e){ /* ignore */ }
-              return pollWithBackoff(attempt + 1);
+              fs.unlinkSync(captionLocalPath);
+              fs.unlinkSync(marginLocalPath);
+            } catch (e) {
+              console.warn("Could not clean up temporary files:", e);
             }
 
-            const s3Url = uploadResult.Location;
-           
-           
-            // Update DB record with final status and image urls
-            try {
-              await AiKidImageModel.updateOne(
-                { job_id: jobId },
-                {
-                  $set: {
-                    status: "completed",
-                    image_urls: [s3Url] || null,
-                    updated_at: new Date(),
-                  },
-                }
-              );
-            } catch (dbErr) {
-              console.error(
-                "Failed to update AiKidImageModel after completion:",
-                dbErr
-              );
-            }
             return; // finished, stop polling
           }
 
-          // not completed yet -> schedule next poll with increased attempt
+          // not completed yet -> schedule next poll
           pollWithBackoff(attempt + 1);
         } catch (pollErr) {
-          console.error("Error while polling Remaker job:", pollErr);
-          // On polling error, schedule a retry with backoff
+          console.error(
+            "An error occurred during image processing or upload:",
+            pollErr
+          );
+          // On any error, schedule a retry with backoff
           pollWithBackoff(attempt + 1);
         }
       }, delay);
     })();
-
     return res.status(200).json({ job_id: data.result.job_id, ok: true });
-
-    
   } catch (error) {
     console.error("Error generating image:", error);
     res.status(500).json({ error: "Failed to generate image", ok: false });
@@ -283,7 +440,11 @@ export const getGeneratedImage = async (req, res) => {
 };
 
 /** upload a local file to S3 (same approach as storeOriginalImageToS3) */
-async function uploadLocalFileToS3(localFilePath, s3Key, contentType = "image/jpeg") {
+async function uploadLocalFileToS3(
+  localFilePath,
+  s3Key,
+  contentType = "image/jpeg"
+) {
   const fileContent = fs.readFileSync(localFilePath);
   const params = {
     Bucket: process.env.PROD_AWS_S3_BUCKET_NAME,
@@ -306,7 +467,6 @@ async function pollFaceSwap(jobId) {
     }
   );
   const data = await resp.json();
-  
 
   return data;
 }
@@ -391,7 +551,7 @@ export const updatePageImage = async (req, res) => {
 export const createParentAndSendMail = async (req, res) => {
   try {
     const { name, email, kidName, req_id, book_id, notify = false } = req.body;
-    console.log("notify 1:", notify);
+    // console.log("notify 1:", notify);
     // 1. Save parent info to DB
     const parentDeatil = await ParentModel.findOneAndUpdate(
       { req_id }, // filter
@@ -424,8 +584,7 @@ const sendMail = async (
 ) => {
   try {
     // 2. Generate preview URL
-    const previewUrl = `https://storybook-mu-inky.vercel.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
-
+    const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
     // 3. Create nodemailer transporter
     const transporter = nodemailer.createTransport({
       service: "gmail",

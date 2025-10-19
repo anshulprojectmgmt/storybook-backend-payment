@@ -1,21 +1,20 @@
-import mongoose from 'mongoose';
-import dotenv from 'dotenv';
-dotenv.config();
+import mongoose from "mongoose";
 
-let isConnected = false;
-export const mongooseConnection = async() => {
-    if (isConnected) return;
+export const mongooseConnection = async () => {
+  // Check if we're already connected or connecting
+  if (mongoose.connection.readyState === 1) {
+    console.log("MongoDB is already connected.");
+    return;
+  }
 
-    try {
-    const db =  await mongoose.connect(process.env.MONGODB_URI, {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
-        });
-        isConnected = db.connections[0].readyState === 1;
-        console.log('✅ MongoDB connected successfully');
-    } catch (error) {
-        console.error('MongoDB connection error:', error);
+  try {
+    // Pass no options, Mongoose 6+ uses good defaults
+    await mongoose.connect(process.env.MONGODB_URI);
+    console.log("✅ MongoDB connected successfully");
+  } catch (error) {
+    console.error("MongoDB connection error:", error);
+    // This throw is important! It will stop the server from starting
+    // if the database can't be reached.
     throw error;
-    }
-}
-
+  }
+};
