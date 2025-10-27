@@ -4,6 +4,7 @@ dotenv.config();
 import fs from "fs";
 import path from "path";
 import Jimp from "jimp";
+import sharp from "sharp";
 
 import KidPhotoModel from "../models/kidPhotoModel.js";
 import SceneModel from "../models/sceneModel.js";
@@ -27,14 +28,46 @@ const CREATE_JOB_URL =
   "https://developer.remaker.ai/api/remaker/v1/face-swap/create-job";
 
 /** Utility: fetch S3 object as Buffer */
-async function fetchS3Buffer(s3Url) {
-  // parse bucket + key from S3 URL
-  const url = new URL(s3Url);
-  const bucket = url.hostname.split(".")[0]; // bucket-name.s3.amazonaws.com
-  const key = decodeURIComponent(url.pathname.slice(1));
+// async function fetchS3Buffer(s3Url) {
+//   // parse bucket + key from S3 URL
+//   const url = new URL(s3Url);
+//   const bucket = url.hostname.split(".")[0]; // bucket-name.s3.amazonaws.com
+//   const key = decodeURIComponent(url.pathname.slice(1));
 
-  const data = await s3.getObject({ Bucket: bucket, Key: key }).promise();
-  return data.Body; // Buffer
+//   const data = await s3.getObject({ Bucket: bucket, Key: key }).promise();
+//   return data.Body; // Buffer
+// }
+
+export async function fetchS3Buffer(s3Url) {
+  try {
+    const url = new URL(s3Url);
+
+    // Case 1: Standard S3 URL (bucket-name.s3.amazonaws.com/key)
+    if (url.hostname.includes(".s3.amazonaws.com")) {
+      const bucket = url.hostname.split(".s3.amazonaws.com")[0];
+      const key = decodeURIComponent(url.pathname.slice(1));
+
+      const data = await s3.getObject({ Bucket: bucket, Key: key }).promise();
+      return data.Body;
+    }
+
+    // Case 2: Pre-signed URL (s3.amazonaws.com/bucket/key?...signature)
+    if (url.hostname === "s3.amazonaws.com") {
+      const pathParts = url.pathname.split("/").filter(Boolean);
+      const bucket = pathParts.shift();
+      const key = decodeURIComponent(pathParts.join("/"));
+
+      const data = await s3.getObject({ Bucket: bucket, Key: key }).promise();
+      return data.Body;
+    }
+
+    // Case 3: Non-S3 or CDN URL — fallback to normal HTTP fetch
+    const response = await axios.get(s3Url, { responseType: "arraybuffer" });
+    return Buffer.from(response.data);
+  } catch (err) {
+    console.error("Error fetching from S3:", err.message, "URL:", s3Url);
+    throw err;
+  }
 }
 
 export const storeOriginalImageToS3 = async (req, res) => {
@@ -276,22 +309,36 @@ export const getGeneratedImage = async (req, res) => {
     if (!target_url || !swap_url) {
       return res.status(400).json({ error: "Missing image URLs" });
     }
+    console.log("target_url-----", target_url);
+    console.log("swap_url-------", swap_url);
 
     // 1. Get binary data from S3
     const targetBuffer = await fetchS3Buffer(target_url);
     const swapBuffer = await fetchS3Buffer(swap_url);
-
+    // to compress the image before sending to remaker
     // 2. Build multipart form
     const form = new FormData();
     form.append("target_image", targetBuffer, { filename: "target.jpg" });
     form.append("swap_image", swapBuffer, { filename: "swap.jpg" });
 
     // 3. Call Remaker API
+    // const response = await axios.post(CREATE_JOB_URL, form, {
+    //   headers: {
+    //     ...form.getHeaders(),
+    //     Authorization: REMAKER_API_KEY,
+    //   },
+    // });
+    // set the image upload size to 10 mb which is by default 2mb
+    form.maxDataSize = 10 * 1024 * 1024; // 10 MB
+
     const response = await axios.post(CREATE_JOB_URL, form, {
       headers: {
         ...form.getHeaders(),
         Authorization: REMAKER_API_KEY,
       },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      timeout: 60000,
     });
     const data = response.data;
 
@@ -448,6 +495,7 @@ async function uploadLocalFileToS3(
   contentType = "image/jpeg"
 ) {
   const fileContent = fs.readFileSync(localFilePath);
+
   const params = {
     Bucket: process.env.PROD_AWS_S3_BUCKET_NAME,
     Key: s3Key,
