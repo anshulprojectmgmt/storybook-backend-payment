@@ -9,8 +9,8 @@ import { mongooseConnection } from "./src/config/mongooseConfig.js";
 
 const app = express();
 const corsOptions = {
-  origin: "https://storybookg.netlify.app", // Or use specific origin like "https://your-frontend.com"
-  // origin: "http://localhost:5173",
+  // origin: "https://storybookg.netlify.app", // Or use specific origin like "https://your-frontend.com"
+  origin: "http://localhost:5173",
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: [
     "Content-Type",

@@ -5,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import Jimp from "jimp";
 import sharp from "sharp";
+import { createCanvas, loadImage } from "@napi-rs/canvas";
 
 import KidPhotoModel from "../models/kidPhotoModel.js";
 import SceneModel from "../models/sceneModel.js";
@@ -15,6 +16,11 @@ import nodemailer from "nodemailer";
 import axios from "axios";
 import FormData from "form-data";
 import sgMail from "@sendgrid/mail";
+// import { createBackCover } from "../helper/createBackCover.js";
+// import { createFrontCoverWithLogo } from "../helper/createFrontCoverWithLogo.js";
+import { createFrontCoverCanvas } from "../helper/createFrontCoverCanvas.js";
+import { addFixedPrintMargin } from "../helper/addFixedPrintMargin.js";
+
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 // Configure AWS S3
@@ -28,15 +34,6 @@ const CREATE_JOB_URL =
   "https://developer.remaker.ai/api/remaker/v1/face-swap/create-job";
 
 /** Utility: fetch S3 object as Buffer */
-// async function fetchS3Buffer(s3Url) {
-//   // parse bucket + key from S3 URL
-//   const url = new URL(s3Url);
-//   const bucket = url.hostname.split(".")[0]; // bucket-name.s3.amazonaws.com
-//   const key = decodeURIComponent(url.pathname.slice(1));
-
-//   const data = await s3.getObject({ Bucket: bucket, Key: key }).promise();
-//   return data.Body; // Buffer
-// }
 
 export async function fetchS3Buffer(s3Url) {
   try {
@@ -131,114 +128,94 @@ export const add_photoToDB = async (req, res) => {
  * Takes an image buffer and adds caption text with translucent rounded background.
  * Returns modified buffer (JPEG).
  */
-async function addCaptionWithJimp(imageBuffer, captionText) {
-  const img = await Jimp.read(imageBuffer);
-  const font = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE);
 
-  const maxCharsPerLine = 40;
-  const lines = wrapText(captionText, maxCharsPerLine);
+async function addCaptionWithCanva(imageBuffer, captionText) {
+  const img = sharp(imageBuffer);
+  const { width, height } = await img.metadata();
 
-  const lineHeights = [];
-  let textWidth = 0;
-  let textHeight = 0;
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext("2d");
+  const base = await loadImage(imageBuffer);
+  ctx.drawImage(base, 0, 0, width, height);
 
-  for (const line of lines) {
-    const width = Jimp.measureText(font, line);
-    const height = Jimp.measureTextHeight(font, line, 1000);
-    lineHeights.push(height);
-    textWidth = Math.max(textWidth, width);
-    textHeight += height + 10; //12
-  }
+  // Increased bar height visibility ~20%
+  const barHeight = Math.floor(height * 0.2);
 
-  // const paddingX = 25;
-  const paddingY = 25;
-  // ✅ Define your margin from the bottom here
-  const marginBottom = 30; // Use a smaller number to move it down
+  // 🌥 Darker + softer fade background for better contrast
+  const cloud = ctx.createLinearGradient(0, height - barHeight, 0, height);
+  cloud.addColorStop(0, "rgba(0, 0, 0, 0.40)"); // slight fade start
+  cloud.addColorStop(1, "rgba(0, 0, 0, 0.80)"); // stronger dark anchor
+  ctx.fillStyle = cloud;
+  ctx.fillRect(0, height - barHeight, width, barHeight);
 
-  // const x = (img.bitmap.width - textWidth) / 2;
-  const x = 0;
-  const y = img.bitmap.height - textHeight - marginBottom; //100 ,90
-  // ✅ Set the box's width to the full image width
-  const boxWidth = img.bitmap.width;
-  const boxHeight = textHeight + 2 * paddingY;
+  // Auto font size
+  // ⭐ CHANGE #1 – Reduce font size (0.30 → 0.24)
+  let fontSize = Math.floor(barHeight * 0.24);
+  ctx.font = `${fontSize}px Sans-Serif`;
 
-  // background box
-  const box = new Jimp(
-    // textWidth + 2 * paddingX, //2
-    // textHeight + 2 * paddingY, //2
-    boxWidth,
-    boxHeight,
-    Jimp.rgbaToInt(0, 0, 0, 160)
-    // Jimp.rgbaToInt(75, 100, 255, 160)
-  );
-  // img.composite(box, x - paddingX, y - paddingY);
-  img.composite(box, x, y - paddingY);
-
-  // draw text lines
-  let currentY = y;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const lineWidth = Jimp.measureText(font, line);
-    const textX = (img.bitmap.width - lineWidth) / 2;
-    img.print(font, textX, currentY, line);
-    currentY += lineHeights[i] + 10; //15
-  }
-
-  return await img.getBufferAsync(Jimp.MIME_JPEG);
-}
-
-function wrapText(text, width) {
-  const words = text.split(" ");
-  const lines = [];
-  let line = "";
-  for (const word of words) {
-    if ((line + word).length > width) {
-      lines.push(line.trim());
-      line = "";
+  function wrapText(text) {
+    const words = text.split(" ");
+    let line = "",
+      lines = [];
+    for (let w of words) {
+      const test = line + w + " ";
+      if (ctx.measureText(test).width > width * 0.83) {
+        lines.push(line.trim());
+        line = "";
+      }
+      line += w + " ";
     }
-    line += word + " ";
-  }
-  if (line) lines.push(line.trim());
-  return lines;
-}
-
-async function addMarginWithJimp(imageBuffer, marginSize, marginColor, side) {
-  const img = await Jimp.read(imageBuffer);
-  const { width: originalWidth, height: originalHeight } = img.bitmap;
-
-  let newWidth = originalWidth;
-  let newHeight = originalHeight;
-  let pasteX = 0;
-  let pasteY = 0;
-
-  // Calculate new dimensions and paste coordinates based on the side
-  if (side === "left") {
-    newWidth = originalWidth + marginSize;
-    pasteX = marginSize;
-  } else if (side === "right") {
-    newWidth = originalWidth + marginSize;
-  } else if (side === "top") {
-    newHeight = originalHeight + marginSize;
-    pasteY = marginSize;
-  } else if (side === "bottom") {
-    newHeight = originalHeight + marginSize;
-  } else {
-    throw new Error(
-      "Invalid side specified. Use 'top', 'bottom', 'left', or 'right'."
-    );
+    lines.push(line.trim());
+    return lines;
   }
 
-  // Create a new blank canvas with the specified margin color
-  const canvas = new Jimp(newWidth, newHeight, marginColor);
+  let lines = wrapText(captionText);
+  let lineHeight = fontSize * 1.35;
 
-  // Paste the original image onto the new canvas at the correct offset
-  canvas.composite(img, pasteX, pasteY);
+  // Auto-shrink if needed
+  while (lines.length * lineHeight > barHeight * 0.92) {
+    fontSize -= 2;
+    ctx.font = `${fontSize}px Sans-Serif`;
+    lineHeight = fontSize * 1.35;
+    lines = wrapText(captionText);
+  }
 
-  // Set JPEG quality to match the Python script's quality=95
-  canvas.quality(95);
+  // ⭐ CHANGE #2 – Move caption UP by 10px from bottom
+  const centerY =
+    height - barHeight / 2 - ((lines.length - 1) * lineHeight) / 2 - 10;
 
-  // Return the final image as a buffer
-  return await canvas.getBufferAsync(Jimp.MIME_JPEG);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  // 🌌 Cool Blue Fantasy Gradient (same as earlier, kept)
+  const gradient = ctx.createLinearGradient(0, 0, width, 0);
+  gradient.addColorStop(0.0, "#A8C8FF");
+  gradient.addColorStop(0.35, "#7BB6FF");
+  gradient.addColorStop(0.7, "#B8A8FF");
+  gradient.addColorStop(1.0, "#E0DDFF");
+
+  lines.forEach((line, i) => {
+    const y = centerY + i * lineHeight;
+
+    // ✨ Stronger Glow for highlight
+    ctx.save();
+    ctx.shadowColor = "rgba(180, 210, 255, 1)";
+    ctx.shadowBlur = fontSize * 2.4;
+    ctx.fillStyle = gradient;
+    ctx.fillText(line, width / 2, y);
+    ctx.restore();
+
+    // 🖋 Stronger Edge Stroke for readability
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.65)";
+    ctx.lineWidth = fontSize * 0.12;
+    ctx.strokeText(line, width / 2, y);
+
+    // Crisp gradient text top layer
+    ctx.fillStyle = gradient;
+    ctx.fillText(line, width / 2, y);
+  });
+
+  return canvas.toBuffer("image/jpeg");
 }
 
 export const getGeneratedImage = async (req, res) => {
@@ -304,33 +281,33 @@ export const getGeneratedImage = async (req, res) => {
     // ****************************************************************************
 
     // implement remaker api call here
+    // Using Remaker API to generate image
     const target_url = sceneDetails.sceneUrl || "";
     const swap_url = originalImages[0].file_url || "";
     if (!target_url || !swap_url) {
       return res.status(400).json({ error: "Missing image URLs" });
     }
+
     console.log("target_url-----", target_url);
     console.log("swap_url-------", swap_url);
 
-    // 1. Get binary data from S3
+    // 1. Get and compress images
     const targetBuffer = await fetchS3Buffer(target_url);
     const swapBuffer = await fetchS3Buffer(swap_url);
-    // to compress the image before sending to remaker
-    // 2. Build multipart form
+
+    const compressedTarget = await sharp(targetBuffer)
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    const compressedSwap = await sharp(swapBuffer)
+      .jpeg({ quality: 85 })
+      .toBuffer();
+
+    // 2. Build form data
     const form = new FormData();
-    form.append("target_image", targetBuffer, { filename: "target.jpg" });
-    form.append("swap_image", swapBuffer, { filename: "swap.jpg" });
+    form.append("target_image", compressedTarget, { filename: "target.jpg" });
+    form.append("swap_image", compressedSwap, { filename: "swap.jpg" });
 
-    // 3. Call Remaker API
-    // const response = await axios.post(CREATE_JOB_URL, form, {
-    //   headers: {
-    //     ...form.getHeaders(),
-    //     Authorization: REMAKER_API_KEY,
-    //   },
-    // });
-    // set the image upload size to 10 mb which is by default 2mb
-    form.maxDataSize = 10 * 1024 * 1024; // 10 MB
-
+    // 3. Upload to Remaker with high timeout
     const response = await axios.post(CREATE_JOB_URL, form, {
       headers: {
         ...form.getHeaders(),
@@ -338,17 +315,29 @@ export const getGeneratedImage = async (req, res) => {
       },
       maxBodyLength: Infinity,
       maxContentLength: Infinity,
-      timeout: 60000,
+      timeout: 180000, // <-- increased timeout
     });
-    const data = response.data;
 
+    const data = response.data;
     if (data.code !== 100000) {
-      return res
-        .status(500)
-        .json({ error: "Remaker job creation failed", detail: data });
+      return res.status(500).json({
+        error: "Remaker job creation failed",
+        detail: data,
+      });
     }
 
     // create a record for aikidImageModel before returning
+    // await AiKidImageModel.insertOne({
+    //   req_id,
+    //   job_id: data.result.job_id,
+    //   book_id,
+    //   page_number: parseInt(page_number),
+    //   status: "pending",
+    //   image_urls: null,
+    //   image_idx: 0,
+    //   created_at: new Date(),
+    //   updated_at: new Date(),
+    // });
     await AiKidImageModel.insertOne({
       req_id,
       job_id: data.result.job_id,
@@ -357,10 +346,13 @@ export const getGeneratedImage = async (req, res) => {
       status: "pending",
       image_urls: null,
       image_idx: 0,
+      front_cover_url: null,
+      back_cover_url: null,
       created_at: new Date(),
       updated_at: new Date(),
     });
-    // console.log("created the aikidImage Model");
+
+    console.log("created the aikidImage Model");
     // invoke poll remaker and don't wait for it
     // Use a non-overlapping setTimeout-chain with exponential backoff to avoid
     // concurrent polls and to allow controlled retries/backoff.
@@ -388,13 +380,13 @@ export const getGeneratedImage = async (req, res) => {
               sceneDetails?.scene || "Your AI story caption here";
             // replacing the {kid} with actual child name
             captionText = captionText.replaceAll("{kid}", childName);
-            const captionedBuffer = await addCaptionWithJimp(
+            const captionedBuffer = await addCaptionWithCanva(
               initialBuffer,
               captionText
             );
 
             // 3. Upload the captioned image (Image 1)
-            // console.log("Uploading captioned image to S3...");
+            console.log("Uploading captioned image to S3...");
             const captionFileName = `ai_result_${jobId}_caption.jpg`;
             const captionS3Key = `ai_generated_images/${captionFileName}`;
 
@@ -408,28 +400,23 @@ export const getGeneratedImage = async (req, res) => {
               "image/jpeg"
             );
             const s3UrlCaption = uploadResultCaption.Location; // Renamed to avoid confusion
-            // console.log("Uploaded captioned image:", s3UrlCaption);
+            console.log("Uploaded captioned image:", s3UrlCaption);
 
             // 4. Create the margin image from the captioned buffer
-            // console.log("Adding left margin to the image...");
-            // Determine which side the margin should be on.
             const marginSide = page_number % 2 !== 0 ? "left" : "right";
-            // console.log(
-            //   `Page ${page_number} is ${
-            //     marginSide === "left" ? "ODD" : "EVEN"
-            //   }. Adding margin to the ${marginSide}.`
-            // );
-            const marginSize = 100;
-            const marginColor = "#FFFFFF";
-            const marginBuffer = await addMarginWithJimp(
+            console.log(
+              `Page ${page_number} is ${
+                marginSide === "left" ? "ODD" : "EVEN"
+              }. Adding margin to the ${marginSide}.`
+            );
+
+            const marginBuffer = await addFixedPrintMargin(
               captionedBuffer,
-              marginSize,
-              marginColor,
-              marginSide // Use the dynamic variable
+              page_number
             );
 
             // 5. Upload the margin image (Image 2)
-            // console.log("Uploading image with margin to S3...");
+            console.log("Uploading image with margin to S3...");
             const marginFileName = `ai_result_${jobId}_margin.jpg`;
             const marginS3Key = `ai_generated_images/${marginFileName}`;
 
@@ -443,7 +430,7 @@ export const getGeneratedImage = async (req, res) => {
               "image/jpeg"
             );
             const s3UrlWithMargin = uploadResultMargin.Location;
-            // console.log("Uploaded image with margin:", s3UrlWithMargin);
+            console.log("Uploaded image with margin:", s3UrlWithMargin);
 
             // 6. Update the database with BOTH URLs
             // console.log("Updating database with both URLs...");
@@ -453,18 +440,122 @@ export const getGeneratedImage = async (req, res) => {
                 $set: {
                   status: "completed",
                   image_urls: [s3UrlCaption, s3UrlWithMargin], // Use both variables
+                  // image_urls: s3UrlWithMargin, // Use both variables
                   updated_at: new Date(),
                 },
               }
             );
+            // // ---  Generate Special Covers ---
+            // const logoUrl = process.env.COMPANY_LOGO_URL;
+            const book = await StoryBookModel.findOne(
+              { _id: book_id },
+              { page_count: 1, title: 1 }
+            );
+
+            // // Back Cover (Page 2)
+            // ✅ Fixed Back Cover (from env, same for all books)
+            // const fixedBackCoverUrl = process.env.DEFAULT_BACK_COVER_URL;
+            // if (fixedBackCoverUrl) {
+            //   await AiKidImageModel.updateOne(
+            //     { req_id },
+            //     { $set: { back_cover_url: fixedBackCoverUrl } }
+            //   );
+            //   console.log("✅ Assigned fixed back cover:", fixedBackCoverUrl);
+            // }
+            const fixedBackCoverUrl = process.env.DEFAULT_BACK_COVER_URL;
+            if (fixedBackCoverUrl) {
+              await AiKidImageModel.updateOne(
+                { req_id },
+                { $set: { back_cover_url: fixedBackCoverUrl } }
+              );
+              console.log("✅ Assigned fixed back cover:", fixedBackCoverUrl);
+            }
+            //  Front Cover (Last Page) - Canvas front cover
+            if (parseInt(page_number) === book.page_count) {
+              console.log("Generating front cover (CANVAS)...");
+
+              // Save original (non-captioned, non-margin) page to temp file
+              const finalPageFileName = `last_page_${jobId}.jpg`;
+              const finalPageLocalPath = `/tmp/${finalPageFileName}`;
+              fs.writeFileSync(finalPageLocalPath, initialBuffer);
+
+              // Upload last page to S3
+              const finalPageUpload = await uploadLocalFileToS3(
+                finalPageLocalPath,
+                `storybook_pages/${finalPageFileName}`,
+                "image/jpeg"
+              );
+
+              const lastPageUrl = finalPageUpload.Location;
+              console.log("✅ Last page uploaded to S3:", lastPageUrl);
+
+              // Generate front cover using Canvas (NEW HELPER)
+              const frontCoverS3Url = await createFrontCoverCanvas(
+                lastPageUrl,
+                childName,
+                process.env.COMPANY_LOGO_URL, // send logo URL
+                book.title
+              );
+
+              // Save final front cover URL to DB
+              await AiKidImageModel.updateOne(
+                { req_id },
+                { $set: { front_cover_url: frontCoverS3Url } }
+              );
+
+              console.log("🎉 Final Front Cover Ready:", frontCoverS3Url);
+
+              // Cleanup
+              try {
+                fs.unlinkSync(finalPageLocalPath);
+              } catch (e) {
+                console.warn(
+                  "Could not delete last page temp file:",
+                  e.message
+                );
+              }
+            }
+
+            // if (parseInt(page_number) === book.page_count) {
+            //   console.log("Generating front cover (PLACID)...");
+
+            //   // ✅ Use REMAKER ORIGINAL IMAGE (initialBuffer) NOT caption or margin image
+            //   const finalPageFileName = `last_page_${jobId}.jpg`;
+            //   const finalPageLocalPath = `/tmp/${finalPageFileName}`;
+            //   fs.writeFileSync(finalPageLocalPath, initialBuffer);
+
+            //   // ✅ Upload initialBuffer to S3
+            //   const finalPageUpload = await uploadLocalFileToS3(
+            //     finalPageLocalPath,
+            //     `storybook_pages/${finalPageFileName}`,
+            //     "image/jpeg"
+            //   );
+            //   const lastPageUrl = finalPageUpload.Location;
+            //   console.log("✅ Last page uploaded to S3:", lastPageUrl);
+
+            //   // ✅ Generate cover via Placid → then upload to S3 → return final S3 URL
+            //   const frontCoverS3Url = await createFrontCoverWithCanvas(
+            //     lastPageUrl,
+            //     childName
+            //   );
+
+            //   // ✅ Save final front cover to DB
+            //   await AiKidImageModel.updateOne(
+            //     { req_id },
+            //     { $set: { front_cover_url: frontCoverS3Url } }
+            //   );
+
+            //   fs.unlinkSync(finalPageLocalPath);
+            //   console.log("🎉 Final Front Cover Ready:", frontCoverS3Url);
+            // }
 
             // 7. Cleanup local files
-            try {
-              fs.unlinkSync(captionLocalPath);
-              fs.unlinkSync(marginLocalPath);
-            } catch (e) {
-              console.warn("Could not clean up temporary files:", e);
-            }
+            // try {
+            fs.unlinkSync(captionLocalPath);
+            //   fs.unlinkSync(marginLocalPath);
+            // } catch (e) {
+            //   console.warn("Could not clean up temporary files:", e);
+            // }
 
             return; // finished, stop polling
           }
@@ -489,7 +580,7 @@ export const getGeneratedImage = async (req, res) => {
 };
 
 /** upload a local file to S3 (same approach as storeOriginalImageToS3) */
-async function uploadLocalFileToS3(
+export async function uploadLocalFileToS3(
   localFilePath,
   s3Key,
   contentType = "image/jpeg"
@@ -537,10 +628,12 @@ export const checkGenerationStatus = async (req, res) => {
         { page_count: 1 }
       );
       const next = page_number < book.page_count ? true : false;
+
       res.status(200).json({
         ...aiImageDetail.toObject(),
         scene: sceneDetails.scene,
         next,
+        pdf_url: parentDetails?.pdf_url || null,
         ok: true,
       });
 
@@ -691,6 +784,7 @@ export const createParentAndSendMail = async (req, res) => {
 //     throw error;
 //   }
 // };
+
 const sendMail = async (
   req_id,
   name,
@@ -699,7 +793,7 @@ const sendMail = async (
   email,
   emailStatus = false
 ) => {
-  const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
+  const previewUrl = `http://localhost:5173/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
 
   const msg = {
     to: email,
