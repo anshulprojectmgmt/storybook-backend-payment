@@ -6,7 +6,6 @@ import {
   checkGenerationStatus,
   updatePageImage,
   createParentAndSendMail,
-  sendPreviewPdfEmail,
 } from "../controllers/photoController.js";
 import upload from "../middlewares/uploadMiddleware.js";
 import { getAllBookPages } from "../controllers/getAllBookPages.js";
