@@ -793,7 +793,7 @@ const sendMail = async (
   email,
   emailStatus = false
 ) => {
-  const previewUrl = `http://localhost:5173/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
+  const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
 
   const msg = {
     to: email,
