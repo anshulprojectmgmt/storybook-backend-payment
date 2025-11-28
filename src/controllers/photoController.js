@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 dotenv.config();
 import fs from "fs";
 import path from "path";
-import Jimp from "jimp";
+// import Jimp from "jimp";
 import sharp from "sharp";
 import { createCanvas, loadImage } from "@napi-rs/canvas";
 
@@ -12,7 +12,7 @@ import SceneModel from "../models/sceneModel.js";
 import StoryBookModel from "../models/StoryBookModel.js";
 import AiKidImageModel from "../models/aiKidImageModel.js";
 import ParentModel from "../models/parentModel.js";
-import nodemailer from "nodemailer";
+// import nodemailer from "nodemailer";
 import axios from "axios";
 import FormData from "form-data";
 import sgMail from "@sendgrid/mail";
