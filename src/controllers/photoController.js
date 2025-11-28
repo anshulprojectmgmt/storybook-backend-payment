@@ -1,6 +1,6 @@
 import AWS from "aws-sdk";
-import dotenv from "dotenv";
-dotenv.config();
+// import dotenv from "dotenv";
+// dotenv.config();
 import fs from "fs";
 import path from "path";
 // import Jimp from "jimp";
@@ -812,7 +812,15 @@ const sendMail = async (
       <p>Warm regards,<br/>StoryBook Team</p>
     `,
   };
+  console.log("SENDGRID API:", process.env.SENDGRID_API_KEY);
+  console.log("MAIL_SENDER:", process.env.MAIL_SENDER);
+  await sgMail
+    .send(msg)
+    .then(() => console.log("Mail Sent!"))
+    .catch((err) => {
+      console.log("SendGrid Error:", err.response?.body || err.message);
+    });
 
-  await sgMail.send(msg);
-  console.log("Preview email sent to:", email);
+  // await sgMail.send(msg);
+  // console.log("Preview email sent to:", email);
 };
