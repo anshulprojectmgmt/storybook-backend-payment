@@ -633,7 +633,6 @@ export const checkGenerationStatus = async (req, res) => {
         ...aiImageDetail.toObject(),
         scene: sceneDetails.scene,
         next,
-        pdf_url: parentDetails?.pdf_url || null,
         ok: true,
       });
 
