@@ -12,7 +12,7 @@ import SceneModel from "../models/sceneModel.js";
 import StoryBookModel from "../models/StoryBookModel.js";
 import AiKidImageModel from "../models/aiKidImageModel.js";
 import ParentModel from "../models/parentModel.js";
-import nodemailer from "nodemailer";
+// import nodemailer from "nodemailer";
 import axios from "axios";
 import FormData from "form-data";
 import sgMail from "@sendgrid/mail";
@@ -725,65 +725,6 @@ export const createParentAndSendMail = async (req, res) => {
   }
 };
 
-const sendMail = async (
-  req_id,
-  name,
-  kidName,
-  book_id,
-  email,
-  emailStatus = false
-) => {
-  try {
-    // 2. Generate preview URL
-    const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
-    // 3. Create nodemailer transporter
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: process.env.MAIL_USER,
-        pass: process.env.MAIL_PASS,
-      },
-    });
-
-    // 4. Compose HTML email
-    const emailHtml = `
-      <p>Dear ${name},</p>
-      <p>
-        Congratulations on taking the first step in crafting ${kidName}'s magical book with Storybook!
-        Unlike any other personalized books, they're not just a name on a page;
-        they're the star, brought to life through personalized illustrations. 🌈📖
-      </p>
-      <p><strong>${kidName}'s Book Preview:</strong></p>
-      <p>Your magical creation is underway! Feel free to refine it and show it to others by clicking the button below.</p>
-      <a href="${previewUrl}" style="
-        display: inline-block;
-        padding: 12px 20px;
-        background-color: #007BFF;
-        color: white;
-        text-decoration: none;
-        font-weight: bold;
-        border-radius: 4px;
-        margin: 20px 0;
-      ">Refine ${kidName}'s Book</a>
-      <p><strong>Questions?</strong></p>
-      <p>If you have any questions or need further assistance, simply reply to this email.
-      We're here to help you craft a treasured keepsake for ${kidName}.</p>
-      <p>Warmest regards,<br>The StoryBook Team</p>
-    `;
-
-    // 5. Send email
-    await transporter.sendMail({
-      from: `"Storybook" <${process.env.MAIL_USER}>`,
-      to: email,
-      subject: `Preview and Refine ${kidName}'s Magical Book!`,
-      html: emailHtml,
-    });
-  } catch (error) {
-    console.error("Error sending email:", error);
-    throw error;
-  }
-};
-
 // const sendMail = async (
 //   req_id,
 //   name,
@@ -792,35 +733,94 @@ const sendMail = async (
 //   email,
 //   emailStatus = false
 // ) => {
-//   const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
-
-//   const msg = {
-//     to: email,
-//     from: process.env.MAIL_SENDER, // Verified sender in SendGrid
-//     subject: `Preview and Refine ${kidName}'s Magical Book!`,
-//     html: `
-//       <p>Dear ${name},</p>
-//       <p>Congratulations on crafting ${kidName}'s magical book!</p>
-//       <p><strong>${kidName}'s Book Preview:</strong></p>
-//       <p>Click below to view and refine the book:</p>
-//       <a href="${previewUrl}" style="
-//         display:inline-block;padding:12px 20px;
-//         background-color:#007BFF;color:white;
-//         text-decoration:none;font-weight:bold;border-radius:4px;
-//         margin:20px 0;">Refine ${kidName}'s Book</a>
-//       <p>If you have questions, just reply to this email.</p>
-//       <p>Warm regards,<br/>StoryBook Team</p>
-//     `,
-//   };
-//   console.log("SENDGRID API:", process.env.SENDGRID_API_KEY);
-//   console.log("MAIL_SENDER:", process.env.MAIL_SENDER);
-//   await sgMail
-//     .send(msg)
-//     .then(() => console.log("Mail Sent!"))
-//     .catch((err) => {
-//       console.log("SendGrid Error:", err.response?.body || err.message);
+//   try {
+//     // 2. Generate preview URL
+//     const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
+//     // 3. Create nodemailer transporter
+//     const transporter = nodemailer.createTransport({
+//       service: "gmail",
+//       auth: {
+//         user: process.env.MAIL_USER,
+//         pass: process.env.MAIL_PASS,
+//       },
 //     });
 
-//   // await sgMail.send(msg);
-//   // console.log("Preview email sent to:", email);
+//     // 4. Compose HTML email
+//     const emailHtml = `
+//       <p>Dear ${name},</p>
+//       <p>
+//         Congratulations on taking the first step in crafting ${kidName}'s magical book with Storybook!
+//         Unlike any other personalized books, they're not just a name on a page;
+//         they're the star, brought to life through personalized illustrations. 🌈📖
+//       </p>
+//       <p><strong>${kidName}'s Book Preview:</strong></p>
+//       <p>Your magical creation is underway! Feel free to refine it and show it to others by clicking the button below.</p>
+//       <a href="${previewUrl}" style="
+//         display: inline-block;
+//         padding: 12px 20px;
+//         background-color: #007BFF;
+//         color: white;
+//         text-decoration: none;
+//         font-weight: bold;
+//         border-radius: 4px;
+//         margin: 20px 0;
+//       ">Refine ${kidName}'s Book</a>
+//       <p><strong>Questions?</strong></p>
+//       <p>If you have any questions or need further assistance, simply reply to this email.
+//       We're here to help you craft a treasured keepsake for ${kidName}.</p>
+//       <p>Warmest regards,<br>The StoryBook Team</p>
+//     `;
+
+//     // 5. Send email
+//     await transporter.sendMail({
+//       from: `"Storybook" <${process.env.MAIL_USER}>`,
+//       to: email,
+//       subject: `Preview and Refine ${kidName}'s Magical Book!`,
+//       html: emailHtml,
+//     });
+//   } catch (error) {
+//     console.error("Error sending email:", error);
+//     throw error;
+//   }
 // };
+
+const sendMail = async (
+  req_id,
+  name,
+  kidName,
+  book_id,
+  email,
+  emailStatus = false
+) => {
+  const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
+
+  const msg = {
+    to: email,
+    from: process.env.MAIL_SENDER, // Verified sender in SendGrid
+    subject: `Preview and Refine ${kidName}'s Magical Book!`,
+    html: `
+      <p>Dear ${name},</p>
+      <p>Congratulations on crafting ${kidName}'s magical book!</p>
+      <p><strong>${kidName}'s Book Preview:</strong></p>
+      <p>Click below to view and refine the book:</p>
+      <a href="${previewUrl}" style="
+        display:inline-block;padding:12px 20px;
+        background-color:#007BFF;color:white;
+        text-decoration:none;font-weight:bold;border-radius:4px;
+        margin:20px 0;">Refine ${kidName}'s Book</a>
+      <p>If you have questions, just reply to this email.</p>
+      <p>Warm regards,<br/>StoryBook Team</p>
+    `,
+  };
+  console.log("SENDGRID API:", process.env.SENDGRID_API_KEY);
+  console.log("MAIL_SENDER:", process.env.MAIL_SENDER);
+  await sgMail
+    .send(msg)
+    .then(() => console.log("Mail Sent!"))
+    .catch((err) => {
+      console.log("SendGrid Error:", err.response?.body || err.message);
+    });
+
+  // await sgMail.send(msg);
+  // console.log("Preview email sent to:", email);
+};
