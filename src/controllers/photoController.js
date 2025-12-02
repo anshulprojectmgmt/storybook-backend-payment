@@ -812,8 +812,8 @@ const sendMail = async (
       <p>Warm regards,<br/>StoryBook Team</p>
     `,
   };
-  console.log("SENDGRID API:", process.env.SENDGRID_API_KEY);
-  console.log("MAIL_SENDER:", process.env.MAIL_SENDER);
+  // console.log("SENDGRID API:", process.env.SENDGRID_API_KEY);
+  // console.log("MAIL_SENDER:", process.env.MAIL_SENDER);
   await sgMail
     .send(msg)
     .then(() => console.log("Mail Sent!"))
