@@ -1,6 +1,6 @@
 import AWS from "aws-sdk";
-// import dotenv from "dotenv";
-// dotenv.config();
+import dotenv from "dotenv";
+dotenv.config();
 import fs from "fs";
 import path from "path";
 // import Jimp from "jimp";
@@ -20,6 +20,7 @@ import sgMail from "@sendgrid/mail";
 // import { createFrontCoverWithLogo } from "../helper/createFrontCoverWithLogo.js";
 import { createFrontCoverCanvas } from "../helper/createFrontCoverCanvas.js";
 import { addFixedPrintMargin } from "../helper/addFixedPrintMargin.js";
+import { generateStoryPdfForRequest } from "../helper/pdfService.js";
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
@@ -452,26 +453,17 @@ export const getGeneratedImage = async (req, res) => {
               { page_count: 1, title: 1 }
             );
 
-            // // Back Cover (Page 2)
-            // ✅ Fixed Back Cover (from env, same for all books)
-            // const fixedBackCoverUrl = process.env.DEFAULT_BACK_COVER_URL;
-            // if (fixedBackCoverUrl) {
-            //   await AiKidImageModel.updateOne(
-            //     { req_id },
-            //     { $set: { back_cover_url: fixedBackCoverUrl } }
-            //   );
-            //   console.log("✅ Assigned fixed back cover:", fixedBackCoverUrl);
-            // }
-            const fixedBackCoverUrl = process.env.DEFAULT_BACK_COVER_URL;
-            if (fixedBackCoverUrl) {
-              await AiKidImageModel.updateOne(
-                { req_id },
-                { $set: { back_cover_url: fixedBackCoverUrl } }
-              );
-              console.log("✅ Assigned fixed back cover:", fixedBackCoverUrl);
-            }
             //  Front Cover (Last Page) - Canvas front cover
             if (parseInt(page_number) === book.page_count) {
+              //  BackCover Generation
+              const fixedBackCoverUrl = process.env.DEFAULT_BACK_COVER_URL;
+              if (fixedBackCoverUrl) {
+                await AiKidImageModel.updateOne(
+                  { req_id },
+                  { $set: { back_cover_url: fixedBackCoverUrl } }
+                );
+                console.log("✅ Assigned fixed back cover:", fixedBackCoverUrl);
+              }
               console.log("Generating front cover (CANVAS)...");
 
               // Save original (non-captioned, non-margin) page to temp file
@@ -505,6 +497,21 @@ export const getGeneratedImage = async (req, res) => {
 
               console.log("🎉 Final Front Cover Ready:", frontCoverS3Url);
 
+              // ✅ NEW: Generate final PDF for this req_id
+              try {
+                console.log("📄 Generating final PDF for:", req_id);
+                const pdfUrl = await generateStoryPdfForRequest(req_id);
+                console.log("📄 PDF generated at:", pdfUrl);
+
+                // ✅ Save pdf_url on ParentModel
+                const parent = await ParentModel.findOneAndUpdate(
+                  { req_id },
+                  { $set: { pdf_url: pdfUrl } },
+                  { new: true }
+                );
+              } catch (err) {
+                console.error("Error generating/sending PDF:", err);
+              }
               // Cleanup
               try {
                 fs.unlinkSync(finalPageLocalPath);
@@ -793,6 +800,7 @@ const sendMail = async (
   emailStatus = false
 ) => {
   const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
+  // const previewUrl = `http://127.0.0.1:3000/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
 
   const msg = {
     to: email,

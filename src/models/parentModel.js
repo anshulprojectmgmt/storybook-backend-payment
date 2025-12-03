@@ -22,7 +22,10 @@ const parentSchema = new mongoose.Schema({
     enum: ["paid", "pending"],
     default: "pending",
   },
-
+  pdf_url: {
+    type: String,
+    default: null,
+  },
   notify: {
     type: Boolean,
     default: false, // Default to false to send email notifications
