@@ -509,6 +509,19 @@ export const getGeneratedImage = async (req, res) => {
                   { $set: { pdf_url: pdfUrl } },
                   { new: true }
                 );
+                // 🔔 Send PDF-ready email to parent automatically
+                if (parent?.email) {
+                  await sendMail(
+                    req_id,
+                    parent.name,
+                    parent.kidName,
+                    book_id,
+                    parent.email,
+                    false,
+                    true
+                  );
+                  console.log("📩 PDF ready email sent to:", parent.email);
+                }
               } catch (err) {
                 console.error("Error generating/sending PDF:", err);
               }
@@ -732,6 +745,69 @@ export const createParentAndSendMail = async (req, res) => {
   }
 };
 
+const sendMail = async (
+  req_id,
+  name,
+  kidName,
+  book_id,
+  email,
+  emailStatus = false,
+  pdfReady = false
+) => {
+  const parentDetails = await ParentModel.findOne({ req_id });
+  const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
+  const pdfUrl = parentDetails?.pdf_url || null;
+  console.log(pdfUrl);
+
+  const emailHtml = `
+      <p>Dear ${name},</p>
+      <p>${
+        pdfReady
+          ? `${kidName}'s final storybook PDF is now ready! 🎉`
+          : `We are crafting ${kidName}'s magical storybook!`
+      }</p>
+
+      ${
+        pdfReady
+          ? `
+            <p><strong>Download Full PDF:</strong></p>
+            <a href="${pdfUrl}" style="
+              display:inline-block;padding:12px 20px;
+              background-color:#28A745;color:white;
+              text-decoration:none;font-weight:bold;border-radius:4px;
+              margin:10px 0;">Download PDF</a>
+            `
+          : `
+            <p><strong>Preview Book:</strong></p>
+            <a href="${previewUrl}" style="
+              display:inline-block;padding:12px 20px;
+              background-color:#007BFF;color:white;
+              text-decoration:none;font-weight:bold;border-radius:4px;
+              margin:10px 0;">Preview Story Book</a>
+                <a href="${pdfUrl}" style="
+              display:inline-block;padding:12px 20px;
+              background-color:#007BFF;color:white;
+              text-decoration:none;font-weight:bold;border-radius:4px;
+              margin:10px 0;">Pdf Url</a>
+          `
+      }
+
+      <p>Warm regards,<br/>StoryBook Team</p>
+  `;
+
+  const msg = {
+    to: email,
+    from: process.env.MAIL_SENDER,
+    subject: pdfReady
+      ? `${kidName}'s StoryBook PDF is Ready! 🎉`
+      : `${kidName}'s StoryBook Preview is Ready!`,
+    html: emailHtml,
+  };
+
+  await sgMail.send(msg);
+  console.log("Email sent ✔");
+};
+
 // const sendMail = async (
 //   req_id,
 //   name,
@@ -791,44 +867,78 @@ export const createParentAndSendMail = async (req, res) => {
 //   }
 // };
 
-const sendMail = async (
-  req_id,
-  name,
-  kidName,
-  book_id,
-  email,
-  emailStatus = false
-) => {
-  const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
-  // const previewUrl = `http://127.0.0.1:3000/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
+// const sendMail = async (
+//   req_id,
+//   name,
+//   kidName,
+//   book_id,
+//   email,
+//   emailStatus = false,
+//   pdfReady = false
+// ) => {
+//   const parentDetails = await ParentModel.findOne({ req_id });
+//   const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
+//   // const previewUrl = `http://127.0.0.1:5173/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
+//   const pdfUrl = parentDetails?.pdf_url || null;
+//   console.log(pdfUrl);
+//   // const msg = {
+//   //   to: email,
+//   //   from: process.env.MAIL_SENDER, // Verified sender in SendGrid
+//   //   subject: `Preview and Refine ${kidName}'s Magical Book!`,
+//   //   html: `
+//   //     <p>Dear ${name},</p>
+//   //     <p>Congratulations on crafting ${kidName}'s magical book!</p>
+//   //     <p><strong>${kidName}'s Book Preview:</strong></p>
+//   //     <p>Click below to view and refine the book:</p>
+//   //     <a href="${previewUrl}" style="
+//   //       display:inline-block;padding:12px 20px;
+//   //       background-color:#007BFF;color:white;
+//   //       text-decoration:none;font-weight:bold;border-radius:4px;
+//   //       margin:20px 0;">Refine ${kidName}'s Book</a>
+//   //     <p>If you have questions, just reply to this email.</p>
+//   //     <p>Warm regards,<br/>StoryBook Team</p>
+//   //   `,
+//   // };
+//   const emailHtml = `
+//       <p>Dear ${name},</p>
+//       <p>Congratulations! ${kidName}'s magical storybook is ready 🎉</p>
 
-  const msg = {
-    to: email,
-    from: process.env.MAIL_SENDER, // Verified sender in SendGrid
-    subject: `Preview and Refine ${kidName}'s Magical Book!`,
-    html: `
-      <p>Dear ${name},</p>
-      <p>Congratulations on crafting ${kidName}'s magical book!</p>
-      <p><strong>${kidName}'s Book Preview:</strong></p>
-      <p>Click below to view and refine the book:</p>
-      <a href="${previewUrl}" style="
-        display:inline-block;padding:12px 20px;
-        background-color:#007BFF;color:white;
-        text-decoration:none;font-weight:bold;border-radius:4px;
-        margin:20px 0;">Refine ${kidName}'s Book</a>
-      <p>If you have questions, just reply to this email.</p>
-      <p>Warm regards,<br/>StoryBook Team</p>
-    `,
-  };
-  // console.log("SENDGRID API:", process.env.SENDGRID_API_KEY);
-  // console.log("MAIL_SENDER:", process.env.MAIL_SENDER);
-  await sgMail
-    .send(msg)
-    .then(() => console.log("Mail Sent!"))
-    .catch((err) => {
-      console.log("SendGrid Error:", err.response?.body || err.message);
-    });
+//       <p><strong>View Preview:</strong></p>
+//       <a href="${previewUrl}" style="
+//         display:inline-block;padding:12px 20px;
+//         background-color:#007BFF;color:white;
+//         text-decoration:none;font-weight:bold;border-radius:4px;
+//         margin:10px 0;">Preview Story Book</a>
 
-  // await sgMail.send(msg);
-  // console.log("Preview email sent to:", email);
-};
+//       ${
+//         pdfUrl
+//           ? `
+//         <p><strong>Download Full PDF:</strong></p>
+//         <a href="${pdfUrl}" style="
+//           display:inline-block;padding:12px 20px;
+//           background-color:#28A745;color:white;
+//           text-decoration:none;font-weight:bold;border-radius:4px;
+//           margin:10px 0;">Download PDF</a>
+//         `
+//           : `<p><i>PDF processing... you will get it soon!</i></p>`
+//       }
+
+//       <p>You can refine any page and make this book even more magical ✨</p>
+//       <p>Warm regards,<br/>StoryBook Team</p>
+//     `;
+//   const msg = {
+//     to: email,
+//     from: process.env.MAIL_SENDER, // verified Sender Identity
+//     subject: `${kidName}'s Magical Book is Ready!`,
+//     html: emailHtml,
+//   };
+//   await sgMail
+//     .send(msg)
+//     .then(() => console.log("Mail Sent!"))
+//     .catch((err) => {
+//       console.log("SendGrid Error:", err.response?.body || err.message);
+//     });
+
+//   // await sgMail.send(msg);
+//   // console.log("Preview email sent to:", email);
+// };
