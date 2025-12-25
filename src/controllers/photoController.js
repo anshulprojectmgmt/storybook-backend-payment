@@ -25,45 +25,81 @@ import { generateStoryPdfForRequest } from "../helper/pdfService.js";
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 // Configure AWS S3
+// const s3 = new AWS.S3({
+//   accessKeyId: process.env.PROD_AWS_ACCESS_KEY_ID,
+//   secretAccessKey: process.env.PROD_AWS_SECRET_ACCESS_KEY,
+//   region: process.env.PROD_AWS_REGION,
+// });
 const s3 = new AWS.S3({
   accessKeyId: process.env.PROD_AWS_ACCESS_KEY_ID,
   secretAccessKey: process.env.PROD_AWS_SECRET_ACCESS_KEY,
   region: process.env.PROD_AWS_REGION,
+  maxRetries: 3,
+  httpOptions: {
+    timeout: 15000,
+  },
 });
+
 const REMAKER_API_KEY = process.env.REMAKER_API_KEY;
 const CREATE_JOB_URL =
   "https://developer.remaker.ai/api/remaker/v1/face-swap/create-job";
 
 /** Utility: fetch S3 object as Buffer */
 
+// export async function fetchS3Buffer(s3Url) {
+//   try {
+//     const url = new URL(s3Url);
+
+//     // Case 1: Standard S3 URL (bucket-name.s3.amazonaws.com/key)
+//     if (url.hostname.includes(".s3.amazonaws.com")) {
+//       const bucket = url.hostname.split(".s3.amazonaws.com")[0];
+//       const key = decodeURIComponent(url.pathname.slice(1));
+
+//       const data = await s3.getObject({ Bucket: bucket, Key: key }).promise();
+//       return data.Body;
+//     }
+
+//     // Case 2: Pre-signed URL (s3.amazonaws.com/bucket/key?...signature)
+//     if (url.hostname === "s3.amazonaws.com") {
+//       const pathParts = url.pathname.split("/").filter(Boolean);
+//       const bucket = pathParts.shift();
+//       const key = decodeURIComponent(pathParts.join("/"));
+
+//       const data = await s3.getObject({ Bucket: bucket, Key: key }).promise();
+//       return data.Body;
+//     }
+
+//     // Case 3: Non-S3 or CDN URL — fallback to normal HTTP fetch
+//     const response = await axios.get(s3Url, { responseType: "arraybuffer" });
+//     return Buffer.from(response.data);
+//   } catch (err) {
+//     console.error("Error fetching from S3:", err.message, "URL:", s3Url);
+//     throw err;
+//   }
+// }
+
 export async function fetchS3Buffer(s3Url) {
   try {
     const url = new URL(s3Url);
 
-    // Case 1: Standard S3 URL (bucket-name.s3.amazonaws.com/key)
-    if (url.hostname.includes(".s3.amazonaws.com")) {
-      const bucket = url.hostname.split(".s3.amazonaws.com")[0];
+    // Handles ALL S3 formats including region-based
+    if (url.hostname.includes("s3")) {
+      const bucket = url.hostname.split(".s3")[0];
       const key = decodeURIComponent(url.pathname.slice(1));
 
-      const data = await s3.getObject({ Bucket: bucket, Key: key }).promise();
+      const data = await s3
+        .getObject({
+          Bucket: bucket,
+          Key: key,
+        })
+        .promise();
+
       return data.Body;
     }
 
-    // Case 2: Pre-signed URL (s3.amazonaws.com/bucket/key?...signature)
-    if (url.hostname === "s3.amazonaws.com") {
-      const pathParts = url.pathname.split("/").filter(Boolean);
-      const bucket = pathParts.shift();
-      const key = decodeURIComponent(pathParts.join("/"));
-
-      const data = await s3.getObject({ Bucket: bucket, Key: key }).promise();
-      return data.Body;
-    }
-
-    // Case 3: Non-S3 or CDN URL — fallback to normal HTTP fetch
-    const response = await axios.get(s3Url, { responseType: "arraybuffer" });
-    return Buffer.from(response.data);
+    throw new Error("Non-S3 URL is not allowed here");
   } catch (err) {
-    console.error("Error fetching from S3:", err.message, "URL:", s3Url);
+    console.error("❌ S3 fetch failed:", s3Url, err.message);
     throw err;
   }
 }
@@ -288,6 +324,17 @@ export const getGeneratedImage = async (req, res) => {
     if (!target_url || !swap_url) {
       return res.status(400).json({ error: "Missing image URLs" });
     }
+    if (
+      !target_url.startsWith("https://") ||
+      !swap_url.startsWith("https://")
+    ) {
+      return res.status(400).json({
+        error: "Invalid S3 image URL detected",
+        target_url,
+        swap_url,
+        ok: false,
+      });
+    }
 
     console.log("target_url-----", target_url);
     console.log("swap_url-------", swap_url);
@@ -327,18 +374,6 @@ export const getGeneratedImage = async (req, res) => {
       });
     }
 
-    // create a record for aikidImageModel before returning
-    // await AiKidImageModel.insertOne({
-    //   req_id,
-    //   job_id: data.result.job_id,
-    //   book_id,
-    //   page_number: parseInt(page_number),
-    //   status: "pending",
-    //   image_urls: null,
-    //   image_idx: 0,
-    //   created_at: new Date(),
-    //   updated_at: new Date(),
-    // });
     await AiKidImageModel.insertOne({
       req_id,
       job_id: data.result.job_id,
@@ -361,7 +396,10 @@ export const getGeneratedImage = async (req, res) => {
 
     (function pollWithBackoff(attempt = 0) {
       const delay = 15000; // fixed 15s interval
-
+      if (attempt > 20) {
+        console.error("❌ Polling stopped after max attempts");
+        return;
+      }
       setTimeout(async () => {
         // CORRECTED LOGIC STARTS HERE
         try {
