@@ -318,6 +318,7 @@ export const getGeneratedImage = async (req, res) => {
     console.log("target_url-----", target_url);
     console.log("swap_url-------", swap_url);
 
+    // 1. Fetch & compress images
     const targetBuffer = await fetchS3Buffer(target_url);
     const swapBuffer = await fetchS3Buffer(swap_url);
 
@@ -328,10 +329,12 @@ export const getGeneratedImage = async (req, res) => {
       .jpeg({ quality: 85 })
       .toBuffer();
 
+    // 2. Build form data
     const form = new FormData();
     form.append("target_image", compressedTarget, { filename: "target.jpg" });
     form.append("swap_image", compressedSwap, { filename: "swap.jpg" });
 
+    // 3. Create Remaker job
     const response = await axios.post(CREATE_JOB_URL, form, {
       headers: {
         ...form.getHeaders(),
@@ -375,7 +378,7 @@ export const getGeneratedImage = async (req, res) => {
     console.log("created the aikidImage Model");
 
     /* =========================
-       POLLING (UNCHANGED)
+       POLLING + FULL POST PROCESS
        ========================= */
     (function pollWithBackoff(attempt = 0) {
       const delay = 15000;
@@ -389,44 +392,48 @@ export const getGeneratedImage = async (req, res) => {
           const result = await pollFaceSwap(jobId);
 
           if (result?.code === 100000) {
+            // Download generated image
             const response = await fetch(result.result.output_image_url[0]);
-            const buffer = Buffer.from(await response.arrayBuffer());
+            const initialBuffer = Buffer.from(await response.arrayBuffer());
 
-            const sceneDetails = await SceneModel.findOne({
+            // Caption
+            const scene = await SceneModel.findOne({
               book_id,
               page_number,
             });
 
-            let captionText =
-              sceneDetails?.scene || "Your AI story caption here";
+            let captionText = scene?.scene || "Your AI story caption here";
             captionText = captionText.replaceAll("{kid}", childName);
 
             const captionedBuffer = await addCaptionWithCanva(
-              buffer,
+              initialBuffer,
               captionText
             );
 
-            const captionPath = `/tmp/ai_${jobId}_caption.jpg`;
+            // Upload caption image
+            const captionPath = `/tmp/${jobId}_caption.jpg`;
             fs.writeFileSync(captionPath, captionedBuffer);
 
             const captionUpload = await uploadLocalFileToS3(
               captionPath,
-              `ai_generated_images/ai_${jobId}_caption.jpg`
+              `ai_generated_images/${jobId}_caption.jpg`
             );
 
+            // Margin image
             const marginBuffer = await addFixedPrintMargin(
               captionedBuffer,
               page_number
             );
 
-            const marginPath = `/tmp/ai_${jobId}_margin.jpg`;
+            const marginPath = `/tmp/${jobId}_margin.jpg`;
             fs.writeFileSync(marginPath, marginBuffer);
 
             const marginUpload = await uploadLocalFileToS3(
               marginPath,
-              `ai_generated_images/ai_${jobId}_margin.jpg`
+              `ai_generated_images/${jobId}_margin.jpg`
             );
 
+            // Update DB with images
             await AiKidImageModel.updateOne(
               { job_id: jobId },
               {
@@ -438,6 +445,74 @@ export const getGeneratedImage = async (req, res) => {
               }
             );
 
+            // FRONT / BACK COVER + PDF
+            const book = await StoryBookModel.findOne(
+              { _id: book_id },
+              { page_count: 1, title: 1 }
+            );
+
+            if (parseInt(page_number) === book.page_count) {
+              // Back cover
+              if (process.env.DEFAULT_BACK_COVER_URL) {
+                await AiKidImageModel.updateOne(
+                  { req_id },
+                  {
+                    $set: {
+                      back_cover_url: process.env.DEFAULT_BACK_COVER_URL,
+                    },
+                  }
+                );
+              }
+
+              // Upload last page
+              const lastPagePath = `/tmp/${jobId}_last.jpg`;
+              fs.writeFileSync(lastPagePath, initialBuffer);
+
+              const lastUpload = await uploadLocalFileToS3(
+                lastPagePath,
+                `storybook_pages/${jobId}_last.jpg`
+              );
+
+              // Front cover
+              const frontCoverUrl = await createFrontCoverCanvas(
+                lastUpload.Location,
+                childName,
+                process.env.COMPANY_LOGO_URL,
+                book.title
+              );
+
+              await AiKidImageModel.updateOne(
+                { req_id },
+                { $set: { front_cover_url: frontCoverUrl } }
+              );
+
+              // PDF generation
+              try {
+                const pdfUrl = await generateStoryPdfForRequest(req_id);
+
+                const parent = await ParentModel.findOneAndUpdate(
+                  { req_id },
+                  { $set: { pdf_url: pdfUrl } },
+                  { new: true }
+                );
+
+                if (parent?.email) {
+                  await sendMail(
+                    req_id,
+                    parent.name,
+                    parent.kidName,
+                    book_id,
+                    parent.email,
+                    false,
+                    true
+                  );
+                }
+              } catch (err) {
+                console.error("PDF / Email error:", err);
+              }
+            }
+
+            // Cleanup
             fs.unlinkSync(captionPath);
             fs.unlinkSync(marginPath);
             return;
