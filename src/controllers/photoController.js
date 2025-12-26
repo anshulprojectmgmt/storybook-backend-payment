@@ -255,6 +255,295 @@ async function addCaptionWithCanva(imageBuffer, captionText) {
   return canvas.toBuffer("image/jpeg");
 }
 
+// async function waitForRemakerAndFinalize({
+//   jobId,
+//   req_id,
+//   book_id,
+//   page_number,
+//   childName,
+// }) {
+//   for (let attempt = 0; attempt < 25; attempt++) {
+//     await new Promise((r) => setTimeout(r, 15000));
+
+//     const result = await pollFaceSwap(jobId);
+//     if (result?.code !== 100000) continue;
+
+//     // Download generated image
+//     const response = await fetch(result.result.output_image_url[0]);
+//     const initialBuffer = Buffer.from(await response.arrayBuffer());
+
+//     // Caption
+//     const scene = await SceneModel.findOne({ book_id, page_number });
+//     let captionText = scene?.scene || "Your AI story caption here";
+//     captionText = captionText.replaceAll("{kid}", childName);
+
+//     const captionedBuffer = await addCaptionWithCanva(
+//       initialBuffer,
+//       captionText
+//     );
+
+//     // Upload caption image
+//     const captionPath = `/tmp/${jobId}_caption.jpg`;
+//     fs.writeFileSync(captionPath, captionedBuffer);
+
+//     const captionUpload = await uploadLocalFileToS3(
+//       captionPath,
+//       `ai_generated_images/${jobId}_caption.jpg`
+//     );
+
+//     // Margin image
+//     const marginBuffer = await addFixedPrintMargin(
+//       captionedBuffer,
+//       page_number
+//     );
+
+//     const marginPath = `/tmp/${jobId}_margin.jpg`;
+//     fs.writeFileSync(marginPath, marginBuffer);
+
+//     const marginUpload = await uploadLocalFileToS3(
+//       marginPath,
+//       `ai_generated_images/${jobId}_margin.jpg`
+//     );
+
+//     // Update DB
+//     await AiKidImageModel.updateOne(
+//       { job_id: jobId },
+//       {
+//         $set: {
+//           status: "completed",
+//           image_urls: [captionUpload.Location, marginUpload.Location],
+//           updated_at: new Date(),
+//         },
+//       }
+//     );
+
+//     // Final page logic
+//     const book = await StoryBookModel.findOne(
+//       { _id: book_id },
+//       { page_count: 1, title: 1 }
+//     );
+
+//     if (parseInt(page_number) === book.page_count) {
+//       // Back cover
+//       if (process.env.DEFAULT_BACK_COVER_URL) {
+//         await AiKidImageModel.updateOne(
+//           { req_id },
+//           { $set: { back_cover_url: process.env.DEFAULT_BACK_COVER_URL } }
+//         );
+//       }
+
+//       // Upload last page
+//       const lastPagePath = `/tmp/${jobId}_last.jpg`;
+//       fs.writeFileSync(lastPagePath, initialBuffer);
+
+//       const lastUpload = await uploadLocalFileToS3(
+//         lastPagePath,
+//         `storybook_pages/${jobId}_last.jpg`
+//       );
+
+//       // Front cover
+//       const frontCoverUrl = await createFrontCoverCanvas(
+//         lastUpload.Location,
+//         childName,
+//         process.env.COMPANY_LOGO_URL,
+//         book.title
+//       );
+
+//       await AiKidImageModel.updateOne(
+//         { req_id },
+//         { $set: { front_cover_url: frontCoverUrl } }
+//       );
+//       // Wait for DB consistency
+//       for (let i = 0; i < 5; i++) {
+//         const count = await AiKidImageModel.countDocuments({
+//           req_id,
+//           status: "completed",
+//         });
+//         if (count > 0) break;
+//         await new Promise((r) => setTimeout(r, 1000));
+//       }
+
+//       // PDF
+//       const pdfUrl = await generateStoryPdfForRequest(req_id);
+//       console.log("in with code ", req_id);
+//       const parent = await ParentModel.findOneAndUpdate(
+//         { req_id },
+//         { $set: { pdf_url: pdfUrl } },
+//         {
+//           new: true,
+//           upsert: true, // ✅ THIS FIXES IT
+//         }
+//       );
+
+//       if (parent?.email) {
+//         await sendMail(
+//           req_id,
+//           parent.name,
+//           parent.kidName,
+//           book_id,
+//           parent.email,
+//           false,
+//           true,
+//           pdfUrl // ✅ PASS IT
+//         );
+//       }
+//     }
+
+//     return true;
+//   }
+
+//   throw new Error("Remaker job timeout");
+// }
+
+// export const getGeneratedImage = async (req, res) => {
+//   const { req_id, page_number, book_id, childName } = req.query;
+
+//   try {
+//     /* =========================
+//        FIX-3 STEP 1: RESUME GUARD
+//        ========================= */
+//     const existing = await AiKidImageModel.findOne({
+//       req_id,
+//       book_id,
+//       page_number: parseInt(page_number),
+//     });
+
+//     if (existing) {
+//       return res.status(200).json({
+//         job_id: existing.job_id,
+//         ok: true,
+//         resumed: true,
+//       });
+//     }
+
+//     /* =========================
+//        ORIGINAL LOGIC
+//        ========================= */
+
+//     const originalImages = await KidPhotoModel.find(
+//       { request_id: req_id },
+//       { file_url: 1 }
+//     );
+
+//     if (!originalImages || originalImages.length === 0) {
+//       return res.status(404).json({
+//         error: "No images found for this request ID",
+//         ok: false,
+//       });
+//     }
+
+//     const sceneDetails = await SceneModel.findOne({
+//       book_id,
+//       page_number: parseInt(page_number),
+//     });
+
+//     const target_url = sceneDetails?.sceneUrl || "";
+//     const swap_url = originalImages[0]?.file_url || "";
+
+//     /* =========================
+//        FIX-4 URL VALIDATION
+//        ========================= */
+//     if (
+//       !target_url.startsWith("https://") ||
+//       !swap_url.startsWith("https://")
+//     ) {
+//       return res.status(400).json({
+//         error: "Invalid S3 image URL detected",
+//         target_url,
+//         swap_url,
+//         ok: false,
+//       });
+//     }
+
+//     console.log("target_url-----", target_url);
+//     console.log("swap_url-------", swap_url);
+
+//     // Fetch & compress
+//     const targetBuffer = await fetchS3Buffer(target_url);
+//     const swapBuffer = await fetchS3Buffer(swap_url);
+
+//     const compressedTarget = await sharp(targetBuffer)
+//       .jpeg({ quality: 85 })
+//       .toBuffer();
+//     const compressedSwap = await sharp(swapBuffer)
+//       .jpeg({ quality: 85 })
+//       .toBuffer();
+
+//     // Remaker job
+//     const form = new FormData();
+//     form.append("target_image", compressedTarget, { filename: "target.jpg" });
+//     form.append("swap_image", compressedSwap, { filename: "swap.jpg" });
+
+//     const response = await axios.post(CREATE_JOB_URL, form, {
+//       headers: {
+//         ...form.getHeaders(),
+//         Authorization: REMAKER_API_KEY,
+//       },
+//       maxBodyLength: Infinity,
+//       maxContentLength: Infinity,
+//       timeout: 180000,
+//     });
+
+//     const data = response.data;
+//     if (data.code !== 100000) {
+//       return res.status(500).json({
+//         error: "Remaker job creation failed",
+//         detail: data,
+//       });
+//     }
+
+//     const jobId = data.result.job_id;
+
+//     /* =========================
+//        FIX-3 STEP 2: IDEMPOTENT INSERT
+//        ========================= */
+//     await AiKidImageModel.updateOne(
+//       { req_id, book_id, page_number: parseInt(page_number) },
+//       {
+//         $setOnInsert: {
+//           job_id: jobId,
+//           status: "pending",
+//           image_urls: null,
+//           image_idx: 0,
+//           front_cover_url: null,
+//           back_cover_url: null,
+//           created_at: new Date(),
+//         },
+//         $set: { updated_at: new Date() },
+//       },
+//       { upsert: true }
+//     );
+
+//     console.log("created the aikidImage Model");
+
+//     /* =====================================================
+//        ✅ STEP-2: WAIT FOR FULL PIPELINE (NO BACKGROUND TASKS)
+//        ===================================================== */
+//     await waitForRemakerAndFinalize({
+//       jobId,
+//       req_id,
+//       book_id,
+//       page_number,
+//       childName,
+//     });
+
+//     /* =========================
+//        FINAL RESPONSE
+//        ========================= */
+//     return res.status(200).json({
+//       job_id: jobId,
+//       ok: true,
+//       completed: true,
+//     });
+//   } catch (error) {
+//     console.error("Error generating image:", error);
+//     res.status(500).json({
+//       error: "Failed to generate image",
+//       ok: false,
+//     });
+//   }
+// };
+
 export const getGeneratedImage = async (req, res) => {
   const { req_id, page_number, book_id, childName } = req.query;
 
@@ -493,7 +782,10 @@ export const getGeneratedImage = async (req, res) => {
                 const parent = await ParentModel.findOneAndUpdate(
                   { req_id },
                   { $set: { pdf_url: pdfUrl } },
-                  { new: true }
+                  {
+                    new: true,
+                    upsert: true, // ✅ THIS FIXES IT
+                  }
                 );
 
                 if (parent?.email) {
@@ -533,6 +825,7 @@ export const getGeneratedImage = async (req, res) => {
   }
 };
 
+// -----Original one
 // export const getGeneratedImage = async (req, res) => {
 //   const { req_id, page_number, book_id, childName } = req.query;
 
@@ -1040,8 +1333,9 @@ export const createParentAndSendMail = async (req, res) => {
     // if (!notify) {
     //   await sendMail(req_id, name, kidName, book_id, email, true);
     // }
-    if (!notify) {
+    if (notify) {
       try {
+        console.log(notify);
         await sendMail(req_id, name, kidName, book_id, email, true);
       } catch (err) {
         return res
@@ -1068,13 +1362,13 @@ const sendMail = async (
   book_id,
   email,
   emailStatus = false,
-  pdfReady = false
+  pdfReady = false,
+  pdfUrl = null // ✅ NEW
 ) => {
-  const parentDetails = await ParentModel.findOne({ req_id });
   const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
-  const pdfUrl = parentDetails?.pdf_url || null;
-  console.log(pdfUrl);
-
+  let parent = await ParentModel.findOne({ req_id });
+  pdfUrl = parent?.pdf_url || null;
+  pdfReady = !!pdfUrl;
   const emailHtml = `
       <p>Dear ${name},</p>
       <p>${
