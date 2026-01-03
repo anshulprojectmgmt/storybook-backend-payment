@@ -19,6 +19,7 @@ export const createStoryBook = async (req, res) => {
     min_required_photos,
     source,
     author,
+    gender,
   } = req.body;
   //   console.log(req.body);
   try {
@@ -31,6 +32,7 @@ export const createStoryBook = async (req, res) => {
       min_required_photos,
       source,
       author,
+      gender,
     });
     await newStoryBook.save();
     res

@@ -788,7 +788,7 @@ export const getGeneratedImage = async (req, res) => {
                   }
                 );
 
-                if (parent?.email) {
+                if (parent?.email && !parent.pdf_email_sent) {
                   await sendMail(
                     req_id,
                     parent.name,
@@ -797,6 +797,11 @@ export const getGeneratedImage = async (req, res) => {
                     parent.email,
                     false,
                     true
+                  );
+
+                  await ParentModel.updateOne(
+                    { req_id },
+                    { $set: { pdf_email_sent: true } }
                   );
                 }
               } catch (err) {
@@ -1247,52 +1252,44 @@ export const checkGenerationStatus = async (req, res) => {
 
     const aiImageDetail = await AiKidImageModel.findOne({ job_id });
 
+    if (!aiImageDetail) {
+      return res.status(404).json({
+        error: "Job not found",
+        ok: false,
+      });
+    }
+
     if (aiImageDetail.status === "completed") {
       const sceneDetails = await SceneModel.findOne({
-        book_id: book_id,
+        book_id,
         page_number,
       });
+
       const book = await StoryBookModel.findOne(
         { _id: book_id },
         { page_count: 1 }
       );
-      const next = page_number < book.page_count ? true : false;
 
-      res.status(200).json({
+      const next = page_number < book.page_count;
+
+      // ✅ PURE RESPONSE — NO EMAIL, NO SIDE EFFECT
+      return res.status(200).json({
         ...aiImageDetail.toObject(),
-        scene: sceneDetails.scene,
+        scene: sceneDetails?.scene || "",
         next,
         ok: true,
       });
-
-      // if it is a last page then invoke notify webhook
-      const parentDetails = await ParentModel.findOne({
-        req_id: aiImageDetail.req_id,
-      });
-      if (next === false && parentDetails && parentDetails.notify) {
-        // send email to parent
-        await sendMail(
-          aiImageDetail.req_id,
-          parentDetails.name,
-          parentDetails.kidName,
-          book_id,
-          parentDetails.email
-        );
-        console.log(
-          "Email notification send to parent mail:",
-          parentDetails.email
-        );
-      }
-    } else {
-      res.status(200).json({
-        status: aiImageDetail.status,
-        image_urls: aiImageDetail.image_urls,
-        ok: true,
-      });
     }
+
+    // still processing
+    return res.status(200).json({
+      status: aiImageDetail.status,
+      image_urls: aiImageDetail.image_urls,
+      ok: true,
+    });
   } catch (error) {
     console.log("Error checking generation status:", error);
-    res
+    return res
       .status(500)
       .json({ error: "Failed to check generation status", ok: false });
   }
@@ -1333,15 +1330,13 @@ export const createParentAndSendMail = async (req, res) => {
     // if (!notify) {
     //   await sendMail(req_id, name, kidName, book_id, email, true);
     // }
-    if (notify) {
-      try {
-        console.log(notify);
-        await sendMail(req_id, name, kidName, book_id, email, true);
-      } catch (err) {
-        return res
-          .status(500)
-          .json({ message: "Email failed", error: err.message });
-      }
+    if (notify && !parentDeatil.preview_email_sent) {
+      await sendMail(req_id, name, kidName, book_id, email, true);
+
+      await ParentModel.updateOne(
+        { req_id },
+        { $set: { preview_email_sent: true } }
+      );
     }
 
     res

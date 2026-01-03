@@ -9,6 +9,11 @@ const storyBookSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  gender: {
+    type: String,
+    enum: ["boy", "girl"],
+    required: true,
+  },
   cover_photo: {
     type: String,
     required: true,

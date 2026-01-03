@@ -30,6 +30,8 @@ const parentSchema = new mongoose.Schema({
     type: Boolean,
     default: false, // Default to false to send email notifications
   },
+  preview_email_sent: { type: Boolean, default: false },
+  pdf_email_sent: { type: Boolean, default: false },
 });
 
 const ParentMode = mongoose.model("Parent", parentSchema);
