@@ -42,6 +42,10 @@ const storyBookSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+  price: {
+    type: Number,
+    required: true, // price in INR
+  },
 });
 
 const StoryBookModel = mongoose.model("StoryBook", storyBookSchema);

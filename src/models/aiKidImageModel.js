@@ -1,16 +1,3 @@
-// import mongoose from "mongoose";
-
-// const aiKidImageSchema = new mongoose.Schema(
-//   {
-//     front_cover_url: { type: String, default: null },
-//     back_cover_url: { type: String, default: null },
-//   },
-//   { strict: false }
-// );
-
-// const AiKidImageModel = mongoose.model("AiKidImage", aiKidImageSchema);
-
-// export default AiKidImageModel;
 import mongoose from "mongoose";
 
 const aiKidImageSchema = new mongoose.Schema({

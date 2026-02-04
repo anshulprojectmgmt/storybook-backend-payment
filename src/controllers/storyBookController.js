@@ -49,3 +49,15 @@ export const createStoryBook = async (req, res) => {
 export const updateStoryBook = async (req, res) => {};
 
 export const deleteStoryBook = async (req, res) => {};
+
+export const getBookPrice = async (req, res) => {
+  const book = await StoryBookModel.findById(req.params.book_id, {
+    price: 1,
+  });
+
+  if (!book) {
+    return res.status(404).json({ ok: false });
+  }
+
+  res.json({ ok: true, price: book.price });
+};

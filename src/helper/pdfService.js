@@ -4,6 +4,7 @@ import PDFDocument from "pdfkit";
 import axios from "axios";
 import AiKidImageModel from "../models/aiKidImageModel.js";
 import { uploadLocalFileToS3 } from "../controllers/photoController.js";
+import ParentModel from "../models/parentModel.js";
 
 async function downloadImageToBuffer(url) {
   const response = await axios.get(url, { responseType: "arraybuffer" });
@@ -12,6 +13,12 @@ async function downloadImageToBuffer(url) {
 
 export async function generateStoryPdfForRequest(req_id) {
   console.log("in pdf code request id is ", req_id);
+  // Added payment code new
+  const parent = await ParentModel.findOne({ req_id });
+  if (!parent || parent.payment !== "paid") {
+    throw new Error("Payment not completed.pdf generation blocked.");
+  }
+
   const pages = await AiKidImageModel.find(
     { req_id },
     {
@@ -21,14 +28,14 @@ export async function generateStoryPdfForRequest(req_id) {
       back_cover_url: 1,
       status: 1,
       _id: 0,
-    }
+    },
   ).lean();
 
   const completedPages = pages.filter(
     (p) =>
       p.status === "completed" &&
       Array.isArray(p.image_urls) &&
-      p.image_urls.length > 0
+      p.image_urls.length > 0,
   );
 
   if (!completedPages.length) {
@@ -100,7 +107,7 @@ export async function generateStoryPdfForRequest(req_id) {
   const uploadResult = await uploadLocalFileToS3(
     localPath,
     `storybook_pdfs/${fileName}`,
-    "application/pdf"
+    "application/pdf",
   );
 
   try {

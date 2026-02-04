@@ -24,12 +24,6 @@ import { generateStoryPdfForRequest } from "../helper/pdfService.js";
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-// Configure AWS S3
-// const s3 = new AWS.S3({
-//   accessKeyId: process.env.PROD_AWS_ACCESS_KEY_ID,
-//   secretAccessKey: process.env.PROD_AWS_SECRET_ACCESS_KEY,
-//   region: process.env.PROD_AWS_REGION,
-// });
 const s3 = new AWS.S3({
   accessKeyId: process.env.PROD_AWS_ACCESS_KEY_ID,
   secretAccessKey: process.env.PROD_AWS_SECRET_ACCESS_KEY,
@@ -45,38 +39,6 @@ const CREATE_JOB_URL =
   "https://developer.remaker.ai/api/remaker/v1/face-swap/create-job";
 
 /** Utility: fetch S3 object as Buffer */
-
-// export async function fetchS3Buffer(s3Url) {
-//   try {
-//     const url = new URL(s3Url);
-
-//     // Case 1: Standard S3 URL (bucket-name.s3.amazonaws.com/key)
-//     if (url.hostname.includes(".s3.amazonaws.com")) {
-//       const bucket = url.hostname.split(".s3.amazonaws.com")[0];
-//       const key = decodeURIComponent(url.pathname.slice(1));
-
-//       const data = await s3.getObject({ Bucket: bucket, Key: key }).promise();
-//       return data.Body;
-//     }
-
-//     // Case 2: Pre-signed URL (s3.amazonaws.com/bucket/key?...signature)
-//     if (url.hostname === "s3.amazonaws.com") {
-//       const pathParts = url.pathname.split("/").filter(Boolean);
-//       const bucket = pathParts.shift();
-//       const key = decodeURIComponent(pathParts.join("/"));
-
-//       const data = await s3.getObject({ Bucket: bucket, Key: key }).promise();
-//       return data.Body;
-//     }
-
-//     // Case 3: Non-S3 or CDN URL — fallback to normal HTTP fetch
-//     const response = await axios.get(s3Url, { responseType: "arraybuffer" });
-//     return Buffer.from(response.data);
-//   } catch (err) {
-//     console.error("Error fetching from S3:", err.message, "URL:", s3Url);
-//     throw err;
-//   }
-// }
 
 export async function fetchS3Buffer(s3Url) {
   try {
@@ -255,146 +217,268 @@ async function addCaptionWithCanva(imageBuffer, captionText) {
   return canvas.toBuffer("image/jpeg");
 }
 
-// async function waitForRemakerAndFinalize({
-//   jobId,
-//   req_id,
-//   book_id,
-//   page_number,
-//   childName,
-// }) {
-//   for (let attempt = 0; attempt < 25; attempt++) {
-//     await new Promise((r) => setTimeout(r, 15000));
+export const getGeneratedImage = async (req, res) => {
+  const { req_id, page_number, book_id, childName } = req.query;
 
-//     const result = await pollFaceSwap(jobId);
-//     if (result?.code !== 100000) continue;
+  try {
+    const pageNum = parseInt(page_number);
 
-//     // Download generated image
-//     const response = await fetch(result.result.output_image_url[0]);
-//     const initialBuffer = Buffer.from(await response.arrayBuffer());
+    /* =====================================================
+       🔐 STEP 1: PAYMENT GATING (pages > 3)
+       ===================================================== */
+    if (pageNum > 3) {
+      const parent = await ParentModel.findOne({ req_id });
 
-//     // Caption
-//     const scene = await SceneModel.findOne({ book_id, page_number });
-//     let captionText = scene?.scene || "Your AI story caption here";
-//     captionText = captionText.replaceAll("{kid}", childName);
+      if (!parent || parent.payment !== "paid") {
+        return res.status(403).json({
+          ok: false,
+          locked: true,
+          message: "Payment required to unlock full book",
+        });
+      }
+    }
 
-//     const captionedBuffer = await addCaptionWithCanva(
-//       initialBuffer,
-//       captionText
-//     );
+    /* =====================================================
+       ♻️ STEP 2: RESUME GUARD (idempotent)
+       ===================================================== */
+    const existing = await AiKidImageModel.findOne({
+      req_id,
+      book_id,
+      page_number: pageNum,
+    });
 
-//     // Upload caption image
-//     const captionPath = `/tmp/${jobId}_caption.jpg`;
-//     fs.writeFileSync(captionPath, captionedBuffer);
+    if (existing) {
+      return res.status(200).json({
+        job_id: existing.job_id,
+        ok: true,
+        resumed: true,
+      });
+    }
 
-//     const captionUpload = await uploadLocalFileToS3(
-//       captionPath,
-//       `ai_generated_images/${jobId}_caption.jpg`
-//     );
+    /* =====================================================
+       📸 STEP 3: FETCH SOURCE IMAGES
+       ===================================================== */
+    const originalImages = await KidPhotoModel.find(
+      { request_id: req_id },
+      { file_url: 1 },
+    );
 
-//     // Margin image
-//     const marginBuffer = await addFixedPrintMargin(
-//       captionedBuffer,
-//       page_number
-//     );
+    if (!originalImages?.length) {
+      return res.status(404).json({
+        ok: false,
+        error: "No source images found",
+      });
+    }
 
-//     const marginPath = `/tmp/${jobId}_margin.jpg`;
-//     fs.writeFileSync(marginPath, marginBuffer);
+    const sceneDetails = await SceneModel.findOne({
+      book_id,
+      page_number: pageNum,
+    });
 
-//     const marginUpload = await uploadLocalFileToS3(
-//       marginPath,
-//       `ai_generated_images/${jobId}_margin.jpg`
-//     );
+    const target_url = sceneDetails?.sceneUrl || "";
+    const swap_url = originalImages[0]?.file_url || "";
 
-//     // Update DB
-//     await AiKidImageModel.updateOne(
-//       { job_id: jobId },
-//       {
-//         $set: {
-//           status: "completed",
-//           image_urls: [captionUpload.Location, marginUpload.Location],
-//           updated_at: new Date(),
-//         },
-//       }
-//     );
+    if (
+      !target_url.startsWith("https://") ||
+      !swap_url.startsWith("https://")
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid S3 URLs",
+      });
+    }
 
-//     // Final page logic
-//     const book = await StoryBookModel.findOne(
-//       { _id: book_id },
-//       { page_count: 1, title: 1 }
-//     );
+    /* =====================================================
+       🧠 STEP 4: REMAKER JOB CREATION
+       ===================================================== */
+    const targetBuffer = await fetchS3Buffer(target_url);
+    const swapBuffer = await fetchS3Buffer(swap_url);
 
-//     if (parseInt(page_number) === book.page_count) {
-//       // Back cover
-//       if (process.env.DEFAULT_BACK_COVER_URL) {
-//         await AiKidImageModel.updateOne(
-//           { req_id },
-//           { $set: { back_cover_url: process.env.DEFAULT_BACK_COVER_URL } }
-//         );
-//       }
+    const form = new FormData();
+    form.append(
+      "target_image",
+      await sharp(targetBuffer).jpeg({ quality: 85 }).toBuffer(),
+      { filename: "target.jpg" },
+    );
+    form.append(
+      "swap_image",
+      await sharp(swapBuffer).jpeg({ quality: 85 }).toBuffer(),
+      { filename: "swap.jpg" },
+    );
 
-//       // Upload last page
-//       const lastPagePath = `/tmp/${jobId}_last.jpg`;
-//       fs.writeFileSync(lastPagePath, initialBuffer);
+    const response = await axios.post(CREATE_JOB_URL, form, {
+      headers: {
+        ...form.getHeaders(),
+        Authorization: REMAKER_API_KEY,
+      },
+      timeout: 180000,
+      maxBodyLength: Infinity,
+    });
 
-//       const lastUpload = await uploadLocalFileToS3(
-//         lastPagePath,
-//         `storybook_pages/${jobId}_last.jpg`
-//       );
+    if (response.data.code !== 100000) {
+      return res.status(500).json({
+        ok: false,
+        error: "Remaker job creation failed",
+      });
+    }
 
-//       // Front cover
-//       const frontCoverUrl = await createFrontCoverCanvas(
-//         lastUpload.Location,
-//         childName,
-//         process.env.COMPANY_LOGO_URL,
-//         book.title
-//       );
+    const jobId = response.data.result.job_id;
 
-//       await AiKidImageModel.updateOne(
-//         { req_id },
-//         { $set: { front_cover_url: frontCoverUrl } }
-//       );
-//       // Wait for DB consistency
-//       for (let i = 0; i < 5; i++) {
-//         const count = await AiKidImageModel.countDocuments({
-//           req_id,
-//           status: "completed",
-//         });
-//         if (count > 0) break;
-//         await new Promise((r) => setTimeout(r, 1000));
-//       }
+    /* =====================================================
+       🧾 STEP 5: IDEMPOTENT INSERT
+       ===================================================== */
+    await AiKidImageModel.updateOne(
+      { req_id, book_id, page_number: pageNum },
+      {
+        $setOnInsert: {
+          job_id: jobId,
+          status: "pending",
+          image_urls: null,
+          image_idx: 0,
+          front_cover_url: null,
+          back_cover_url: null,
+          created_at: new Date(),
+        },
+        $set: { updated_at: new Date() },
+      },
+      { upsert: true },
+    );
 
-//       // PDF
-//       const pdfUrl = await generateStoryPdfForRequest(req_id);
-//       console.log("in with code ", req_id);
-//       const parent = await ParentModel.findOneAndUpdate(
-//         { req_id },
-//         { $set: { pdf_url: pdfUrl } },
-//         {
-//           new: true,
-//           upsert: true, // ✅ THIS FIXES IT
-//         }
-//       );
+    /* =====================================================
+       🔁 STEP 6: POLLING + POST PROCESS
+       ===================================================== */
+    (function poll(attempt = 0) {
+      if (attempt > 20) return;
 
-//       if (parent?.email) {
-//         await sendMail(
-//           req_id,
-//           parent.name,
-//           parent.kidName,
-//           book_id,
-//           parent.email,
-//           false,
-//           true,
-//           pdfUrl // ✅ PASS IT
-//         );
-//       }
-//     }
+      setTimeout(async () => {
+        try {
+          const result = await pollFaceSwap(jobId);
 
-//     return true;
-//   }
+          if (result?.code !== 100000) {
+            return poll(attempt + 1);
+          }
 
-//   throw new Error("Remaker job timeout");
-// }
+          /* ---------- IMAGE PROCESSING ---------- */
+          const imgRes = await fetch(result.result.output_image_url[0]);
+          const baseBuffer = Buffer.from(await imgRes.arrayBuffer());
 
+          let captionText =
+            sceneDetails?.scene?.replaceAll("{kid}", childName) ||
+            "Your AI story";
+
+          const captioned = await addCaptionWithCanva(baseBuffer, captionText);
+          const margin = await addFixedPrintMargin(captioned, pageNum);
+
+          const captionPath = `/tmp/${jobId}_caption.jpg`;
+          const marginPath = `/tmp/${jobId}_margin.jpg`;
+
+          fs.writeFileSync(captionPath, captioned);
+          fs.writeFileSync(marginPath, margin);
+
+          const captionUpload = await uploadLocalFileToS3(
+            captionPath,
+            `ai_generated_images/${jobId}_caption.jpg`,
+          );
+          const marginUpload = await uploadLocalFileToS3(
+            marginPath,
+            `ai_generated_images/${jobId}_margin.jpg`,
+          );
+
+          await AiKidImageModel.updateOne(
+            { job_id: jobId },
+            {
+              $set: {
+                status: "completed",
+                image_urls: [captionUpload.Location, marginUpload.Location],
+                updated_at: new Date(),
+              },
+            },
+          );
+
+          /* =====================================================
+             📘 FINAL PAGE → FRONT / BACK COVER + PDF
+             ===================================================== */
+          const book = await StoryBookModel.findById(book_id);
+
+          if (pageNum === book.page_count) {
+            // Back cover
+            if (process.env.DEFAULT_BACK_COVER_URL) {
+              await AiKidImageModel.updateOne(
+                { req_id },
+                {
+                  $set: {
+                    back_cover_url: process.env.DEFAULT_BACK_COVER_URL,
+                  },
+                },
+              );
+            }
+            // Upload last page
+            const lastPagePath = `/tmp/${jobId}_last.jpg`;
+            fs.writeFileSync(lastPagePath, baseBuffer);
+
+            const lastUpload = await uploadLocalFileToS3(
+              lastPagePath,
+              `storybook_pages/${jobId}_last.jpg`,
+            );
+            // Front cover
+            const frontCoverUrl = await createFrontCoverCanvas(
+              lastUpload.Location,
+              childName,
+              process.env.COMPANY_LOGO_URL,
+              book.title,
+            );
+
+            await AiKidImageModel.updateOne(
+              { req_id },
+              { $set: { front_cover_url: frontCoverUrl } },
+            );
+
+            /* ---------- PDF ---------- */
+            const pdfUrl = await generateStoryPdfForRequest(req_id);
+
+            const parent = await ParentModel.findOneAndUpdate(
+              { req_id },
+              { $set: { pdf_url: pdfUrl } },
+              { upsert: true, new: true },
+            );
+
+            if (parent?.email && !parent.pdf_email_sent) {
+              await sendMail(
+                req_id,
+                parent.name,
+                parent.kidName,
+                book_id,
+                parent.email,
+                false,
+                true,
+              );
+
+              await ParentModel.updateOne(
+                { req_id },
+                { $set: { pdf_email_sent: true } },
+              );
+            }
+          }
+
+          fs.unlinkSync(captionPath);
+          fs.unlinkSync(marginPath);
+        } catch (err) {
+          poll(attempt + 1);
+        }
+      }, 5000);
+    })();
+
+    return res.status(200).json({ ok: true, job_id: jobId });
+  } catch (err) {
+    console.error("getGeneratedImage error:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to generate image",
+    });
+  }
+};
+
+// Old stable code before payment integration
 // export const getGeneratedImage = async (req, res) => {
 //   const { req_id, page_number, book_id, childName } = req.query;
 
@@ -402,6 +486,7 @@ async function addCaptionWithCanva(imageBuffer, captionText) {
 //     /* =========================
 //        FIX-3 STEP 1: RESUME GUARD
 //        ========================= */
+
 //     const existing = await AiKidImageModel.findOne({
 //       req_id,
 //       book_id,
@@ -417,12 +502,12 @@ async function addCaptionWithCanva(imageBuffer, captionText) {
 //     }
 
 //     /* =========================
-//        ORIGINAL LOGIC
+//        ORIGINAL LOGIC STARTS
 //        ========================= */
 
 //     const originalImages = await KidPhotoModel.find(
 //       { request_id: req_id },
-//       { file_url: 1 }
+//       { file_url: 1 },
 //     );
 
 //     if (!originalImages || originalImages.length === 0) {
@@ -458,7 +543,7 @@ async function addCaptionWithCanva(imageBuffer, captionText) {
 //     console.log("target_url-----", target_url);
 //     console.log("swap_url-------", swap_url);
 
-//     // Fetch & compress
+//     // 1. Fetch & compress images
 //     const targetBuffer = await fetchS3Buffer(target_url);
 //     const swapBuffer = await fetchS3Buffer(swap_url);
 
@@ -469,11 +554,12 @@ async function addCaptionWithCanva(imageBuffer, captionText) {
 //       .jpeg({ quality: 85 })
 //       .toBuffer();
 
-//     // Remaker job
+//     // 2. Build form data
 //     const form = new FormData();
 //     form.append("target_image", compressedTarget, { filename: "target.jpg" });
 //     form.append("swap_image", compressedSwap, { filename: "swap.jpg" });
 
+//     // 3. Create Remaker job
 //     const response = await axios.post(CREATE_JOB_URL, form, {
 //       headers: {
 //         ...form.getHeaders(),
@@ -511,620 +597,134 @@ async function addCaptionWithCanva(imageBuffer, captionText) {
 //         },
 //         $set: { updated_at: new Date() },
 //       },
-//       { upsert: true }
+//       { upsert: true },
 //     );
 
 //     console.log("created the aikidImage Model");
-
-//     /* =====================================================
-//        ✅ STEP-2: WAIT FOR FULL PIPELINE (NO BACKGROUND TASKS)
-//        ===================================================== */
-//     await waitForRemakerAndFinalize({
-//       jobId,
-//       req_id,
-//       book_id,
-//       page_number,
-//       childName,
-//     });
 
 //     /* =========================
-//        FINAL RESPONSE
+//        POLLING + FULL POST PROCESS
 //        ========================= */
-//     return res.status(200).json({
-//       job_id: jobId,
-//       ok: true,
-//       completed: true,
-//     });
-//   } catch (error) {
-//     console.error("Error generating image:", error);
-//     res.status(500).json({
-//       error: "Failed to generate image",
-//       ok: false,
-//     });
-//   }
-// };
-
-export const getGeneratedImage = async (req, res) => {
-  const { req_id, page_number, book_id, childName } = req.query;
-
-  try {
-    /* =========================
-       FIX-3 STEP 1: RESUME GUARD
-       ========================= */
-    const existing = await AiKidImageModel.findOne({
-      req_id,
-      book_id,
-      page_number: parseInt(page_number),
-    });
-
-    if (existing) {
-      return res.status(200).json({
-        job_id: existing.job_id,
-        ok: true,
-        resumed: true,
-      });
-    }
-
-    /* =========================
-       ORIGINAL LOGIC STARTS
-       ========================= */
-
-    const originalImages = await KidPhotoModel.find(
-      { request_id: req_id },
-      { file_url: 1 }
-    );
-
-    if (!originalImages || originalImages.length === 0) {
-      return res.status(404).json({
-        error: "No images found for this request ID",
-        ok: false,
-      });
-    }
-
-    const sceneDetails = await SceneModel.findOne({
-      book_id,
-      page_number: parseInt(page_number),
-    });
-
-    const target_url = sceneDetails?.sceneUrl || "";
-    const swap_url = originalImages[0]?.file_url || "";
-
-    /* =========================
-       FIX-4 URL VALIDATION
-       ========================= */
-    if (
-      !target_url.startsWith("https://") ||
-      !swap_url.startsWith("https://")
-    ) {
-      return res.status(400).json({
-        error: "Invalid S3 image URL detected",
-        target_url,
-        swap_url,
-        ok: false,
-      });
-    }
-
-    console.log("target_url-----", target_url);
-    console.log("swap_url-------", swap_url);
-
-    // 1. Fetch & compress images
-    const targetBuffer = await fetchS3Buffer(target_url);
-    const swapBuffer = await fetchS3Buffer(swap_url);
-
-    const compressedTarget = await sharp(targetBuffer)
-      .jpeg({ quality: 85 })
-      .toBuffer();
-    const compressedSwap = await sharp(swapBuffer)
-      .jpeg({ quality: 85 })
-      .toBuffer();
-
-    // 2. Build form data
-    const form = new FormData();
-    form.append("target_image", compressedTarget, { filename: "target.jpg" });
-    form.append("swap_image", compressedSwap, { filename: "swap.jpg" });
-
-    // 3. Create Remaker job
-    const response = await axios.post(CREATE_JOB_URL, form, {
-      headers: {
-        ...form.getHeaders(),
-        Authorization: REMAKER_API_KEY,
-      },
-      maxBodyLength: Infinity,
-      maxContentLength: Infinity,
-      timeout: 180000,
-    });
-
-    const data = response.data;
-    if (data.code !== 100000) {
-      return res.status(500).json({
-        error: "Remaker job creation failed",
-        detail: data,
-      });
-    }
-
-    const jobId = data.result.job_id;
-
-    /* =========================
-       FIX-3 STEP 2: IDEMPOTENT INSERT
-       ========================= */
-    await AiKidImageModel.updateOne(
-      { req_id, book_id, page_number: parseInt(page_number) },
-      {
-        $setOnInsert: {
-          job_id: jobId,
-          status: "pending",
-          image_urls: null,
-          image_idx: 0,
-          front_cover_url: null,
-          back_cover_url: null,
-          created_at: new Date(),
-        },
-        $set: { updated_at: new Date() },
-      },
-      { upsert: true }
-    );
-
-    console.log("created the aikidImage Model");
-
-    /* =========================
-       POLLING + FULL POST PROCESS
-       ========================= */
-    (function pollWithBackoff(attempt = 0) {
-      const delay = 15000;
-      if (attempt > 20) {
-        console.error("❌ Polling stopped after max attempts");
-        return;
-      }
-
-      setTimeout(async () => {
-        try {
-          const result = await pollFaceSwap(jobId);
-
-          if (result?.code === 100000) {
-            // Download generated image
-            const response = await fetch(result.result.output_image_url[0]);
-            const initialBuffer = Buffer.from(await response.arrayBuffer());
-
-            // Caption
-            const scene = await SceneModel.findOne({
-              book_id,
-              page_number,
-            });
-
-            let captionText = scene?.scene || "Your AI story caption here";
-            captionText = captionText.replaceAll("{kid}", childName);
-
-            const captionedBuffer = await addCaptionWithCanva(
-              initialBuffer,
-              captionText
-            );
-
-            // Upload caption image
-            const captionPath = `/tmp/${jobId}_caption.jpg`;
-            fs.writeFileSync(captionPath, captionedBuffer);
-
-            const captionUpload = await uploadLocalFileToS3(
-              captionPath,
-              `ai_generated_images/${jobId}_caption.jpg`
-            );
-
-            // Margin image
-            const marginBuffer = await addFixedPrintMargin(
-              captionedBuffer,
-              page_number
-            );
-
-            const marginPath = `/tmp/${jobId}_margin.jpg`;
-            fs.writeFileSync(marginPath, marginBuffer);
-
-            const marginUpload = await uploadLocalFileToS3(
-              marginPath,
-              `ai_generated_images/${jobId}_margin.jpg`
-            );
-
-            // Update DB with images
-            await AiKidImageModel.updateOne(
-              { job_id: jobId },
-              {
-                $set: {
-                  status: "completed",
-                  image_urls: [captionUpload.Location, marginUpload.Location],
-                  updated_at: new Date(),
-                },
-              }
-            );
-
-            // FRONT / BACK COVER + PDF
-            const book = await StoryBookModel.findOne(
-              { _id: book_id },
-              { page_count: 1, title: 1 }
-            );
-
-            if (parseInt(page_number) === book.page_count) {
-              // Back cover
-              if (process.env.DEFAULT_BACK_COVER_URL) {
-                await AiKidImageModel.updateOne(
-                  { req_id },
-                  {
-                    $set: {
-                      back_cover_url: process.env.DEFAULT_BACK_COVER_URL,
-                    },
-                  }
-                );
-              }
-
-              // Upload last page
-              const lastPagePath = `/tmp/${jobId}_last.jpg`;
-              fs.writeFileSync(lastPagePath, initialBuffer);
-
-              const lastUpload = await uploadLocalFileToS3(
-                lastPagePath,
-                `storybook_pages/${jobId}_last.jpg`
-              );
-
-              // Front cover
-              const frontCoverUrl = await createFrontCoverCanvas(
-                lastUpload.Location,
-                childName,
-                process.env.COMPANY_LOGO_URL,
-                book.title
-              );
-
-              await AiKidImageModel.updateOne(
-                { req_id },
-                { $set: { front_cover_url: frontCoverUrl } }
-              );
-
-              // PDF generation
-              try {
-                const pdfUrl = await generateStoryPdfForRequest(req_id);
-
-                const parent = await ParentModel.findOneAndUpdate(
-                  { req_id },
-                  { $set: { pdf_url: pdfUrl } },
-                  {
-                    new: true,
-                    upsert: true, // ✅ THIS FIXES IT
-                  }
-                );
-
-                if (parent?.email && !parent.pdf_email_sent) {
-                  await sendMail(
-                    req_id,
-                    parent.name,
-                    parent.kidName,
-                    book_id,
-                    parent.email,
-                    false,
-                    true
-                  );
-
-                  await ParentModel.updateOne(
-                    { req_id },
-                    { $set: { pdf_email_sent: true } }
-                  );
-                }
-              } catch (err) {
-                console.error("PDF / Email error:", err);
-              }
-            }
-
-            // Cleanup
-            fs.unlinkSync(captionPath);
-            fs.unlinkSync(marginPath);
-            return;
-          }
-
-          pollWithBackoff(attempt + 1);
-        } catch (err) {
-          console.error("Polling error:", err);
-          pollWithBackoff(attempt + 1);
-        }
-      }, delay);
-    })();
-
-    return res.status(200).json({ job_id: jobId, ok: true });
-  } catch (error) {
-    console.error("Error generating image:", error);
-    res.status(500).json({ error: "Failed to generate image", ok: false });
-  }
-};
-
-// -----Original one
-// export const getGeneratedImage = async (req, res) => {
-//   const { req_id, page_number, book_id, childName } = req.query;
-
-//   try {
-//     // memoization
-//     // before generating new image check we have image alredy ready for
-//     // this unique combination --> (req_id & book_id & page_number)
-//     // if yes return job_id
-
-//     const storedKidDetail = await AiKidImageModel.findOne({
-//       req_id,
-//       page_number: parseInt(page_number),
-//     });
-
-//     if (storedKidDetail) {
-//       return res.status(200).json({
-//         job_id: storedKidDetail.job_id,
-//         ok: true,
-//       });
-//     }
-
-//     // get original images from DB based on request_id
-//     const originalImages = await KidPhotoModel.find(
-//       { request_id: req_id },
-//       { file_url: 1 }
-//     );
-//     if (!originalImages || originalImages.length === 0) {
-//       return res
-//         .status(404)
-//         .json({ error: "No images found for this request ID", ok: false });
-//     }
-
-//     // get scene details from DB based on book_id & page_number
-//     const sceneDetails = await SceneModel.findOne({
-//       book_id: book_id,
-//       page_number: parseInt(page_number),
-//     });
-
-//     // const bodyData = {
-//     //   original_image_urls_s3: originalImages.map((image) => image.file_url),
-//     //   scene: sceneDetails.scene,
-//     //   base_image_url: sceneDetails.sceneUrl || "",
-//     //   prompt: sceneDetails.prompt,
-//     //   req_id,
-//     //   page_number: parseInt(page_number),
-//     //   book_id,
-//     // };
-
-//     // *********** pranitha python lambda call start ********************
-//     // console.log('body data for ai image generation:', bodyData);
-
-//     // get AI image for the provided scene and original images
-//     // const aiImageDetails = await axios.post('https://kdjpysy867.execute-api.ap-south-1.amazonaws.com/generate',bodyData);
-//     //   res.status(200).json({...aiImageDetails.data, ok: true});
-
-//     //  **************************************************************************
-//     // *********** pranitha python lambda call END ********************
-
-//     // Using Remaker API to generate image
-//     // https://remaker.ai/docs/api-reference/create-job
-//     // ****************************************************************************
-
-//     // implement remaker api call here
-//     // Using Remaker API to generate image
-//     const target_url = sceneDetails.sceneUrl || "";
-//     const swap_url = originalImages[0].file_url || "";
-//     if (!target_url || !swap_url) {
-//       return res.status(400).json({ error: "Missing image URLs" });
-//     }
-//     if (
-//       !target_url.startsWith("https://") ||
-//       !swap_url.startsWith("https://")
-//     ) {
-//       return res.status(400).json({
-//         error: "Invalid S3 image URL detected",
-//         target_url,
-//         swap_url,
-//         ok: false,
-//       });
-//     }
-
-//     console.log("target_url-----", target_url);
-//     console.log("swap_url-------", swap_url);
-
-//     // 1. Get and compress images
-//     const targetBuffer = await fetchS3Buffer(target_url);
-//     const swapBuffer = await fetchS3Buffer(swap_url);
-
-//     const compressedTarget = await sharp(targetBuffer)
-//       .jpeg({ quality: 85 })
-//       .toBuffer();
-//     const compressedSwap = await sharp(swapBuffer)
-//       .jpeg({ quality: 85 })
-//       .toBuffer();
-
-//     // 2. Build form data
-//     const form = new FormData();
-//     form.append("target_image", compressedTarget, { filename: "target.jpg" });
-//     form.append("swap_image", compressedSwap, { filename: "swap.jpg" });
-
-//     // 3. Upload to Remaker with high timeout
-//     const response = await axios.post(CREATE_JOB_URL, form, {
-//       headers: {
-//         ...form.getHeaders(),
-//         Authorization: REMAKER_API_KEY,
-//       },
-//       maxBodyLength: Infinity,
-//       maxContentLength: Infinity,
-//       timeout: 180000, // <-- increased timeout
-//     });
-
-//     const data = response.data;
-//     if (data.code !== 100000) {
-//       return res.status(500).json({
-//         error: "Remaker job creation failed",
-//         detail: data,
-//       });
-//     }
-
-//     await AiKidImageModel.insertOne({
-//       req_id,
-//       job_id: data.result.job_id,
-//       book_id,
-//       page_number: parseInt(page_number),
-//       status: "pending",
-//       image_urls: null,
-//       image_idx: 0,
-//       front_cover_url: null,
-//       back_cover_url: null,
-//       created_at: new Date(),
-//       updated_at: new Date(),
-//     });
-
-//     console.log("created the aikidImage Model");
-//     // invoke poll remaker and don't wait for it
-//     // Use a non-overlapping setTimeout-chain with exponential backoff to avoid
-//     // concurrent polls and to allow controlled retries/backoff.
-//     const jobId = data.result.job_id;
-
 //     (function pollWithBackoff(attempt = 0) {
-//       const delay = 15000; // fixed 15s interval
+//       const delay = 15000;
 //       if (attempt > 20) {
 //         console.error("❌ Polling stopped after max attempts");
 //         return;
 //       }
+
 //       setTimeout(async () => {
-//         // CORRECTED LOGIC STARTS HERE
 //         try {
 //           const result = await pollFaceSwap(jobId);
-//           if (result && result.code === 100000) {
-//             // 1. Download the initial image from Remaker
-//             const response = await fetch(result.result.output_image_url[0]);
-//             const arrayBuffer = await response.arrayBuffer();
-//             const initialBuffer = Buffer.from(arrayBuffer); // Use a clear variable name
 
-//             // 2. Add the caption
-//             const sceneDetails = await SceneModel.findOne({
+//           if (result?.code === 100000) {
+//             // Download generated image
+//             const response = await fetch(result.result.output_image_url[0]);
+//             const initialBuffer = Buffer.from(await response.arrayBuffer());
+
+//             // Caption
+//             const scene = await SceneModel.findOne({
 //               book_id,
 //               page_number,
 //             });
-//             let captionText =
-//               sceneDetails?.scene || "Your AI story caption here";
-//             // replacing the {kid} with actual child name
+
+//             let captionText = scene?.scene || "Your AI story caption here";
 //             captionText = captionText.replaceAll("{kid}", childName);
+
 //             const captionedBuffer = await addCaptionWithCanva(
 //               initialBuffer,
-//               captionText
+//               captionText,
 //             );
 
-//             // 3. Upload the captioned image (Image 1)
-//             console.log("Uploading captioned image to S3...");
-//             const captionFileName = `ai_result_${jobId}_caption.jpg`;
-//             const captionS3Key = `ai_generated_images/${captionFileName}`;
+//             // Upload caption image
+//             const captionPath = `/tmp/${jobId}_caption.jpg`;
+//             fs.writeFileSync(captionPath, captionedBuffer);
 
-//             // Save to a temporary local file for uploading
-//             const captionLocalPath = path.join("/tmp", captionFileName);
-//             fs.writeFileSync(captionLocalPath, captionedBuffer);
-
-//             const uploadResultCaption = await uploadLocalFileToS3(
-//               captionLocalPath,
-//               captionS3Key,
-//               "image/jpeg"
-//             );
-//             const s3UrlCaption = uploadResultCaption.Location; // Renamed to avoid confusion
-//             console.log("Uploaded captioned image:", s3UrlCaption);
-
-//             // 4. Create the margin image from the captioned buffer
-//             const marginSide = page_number % 2 !== 0 ? "left" : "right";
-//             console.log(
-//               `Page ${page_number} is ${
-//                 marginSide === "left" ? "ODD" : "EVEN"
-//               }. Adding margin to the ${marginSide}.`
+//             const captionUpload = await uploadLocalFileToS3(
+//               captionPath,
+//               `ai_generated_images/${jobId}_caption.jpg`,
 //             );
 
+//             // Margin image
 //             const marginBuffer = await addFixedPrintMargin(
 //               captionedBuffer,
-//               page_number
+//               page_number,
 //             );
 
-//             // 5. Upload the margin image (Image 2)
-//             console.log("Uploading image with margin to S3...");
-//             const marginFileName = `ai_result_${jobId}_margin.jpg`;
-//             const marginS3Key = `ai_generated_images/${marginFileName}`;
+//             const marginPath = `/tmp/${jobId}_margin.jpg`;
+//             fs.writeFileSync(marginPath, marginBuffer);
 
-//             // Save to another temporary local file
-//             const marginLocalPath = path.join("/tmp", marginFileName);
-//             fs.writeFileSync(marginLocalPath, marginBuffer);
-
-//             const uploadResultMargin = await uploadLocalFileToS3(
-//               marginLocalPath,
-//               marginS3Key,
-//               "image/jpeg"
+//             const marginUpload = await uploadLocalFileToS3(
+//               marginPath,
+//               `ai_generated_images/${jobId}_margin.jpg`,
 //             );
-//             const s3UrlWithMargin = uploadResultMargin.Location;
-//             console.log("Uploaded image with margin:", s3UrlWithMargin);
 
-//             // 6. Update the database with BOTH URLs
-//             // console.log("Updating database with both URLs...");
+//             // Update DB with images
 //             await AiKidImageModel.updateOne(
 //               { job_id: jobId },
 //               {
 //                 $set: {
 //                   status: "completed",
-//                   image_urls: [s3UrlCaption, s3UrlWithMargin], // Use both variables
-//                   // image_urls: s3UrlWithMargin, // Use both variables
+//                   image_urls: [captionUpload.Location, marginUpload.Location],
 //                   updated_at: new Date(),
 //                 },
-//               }
+//               },
 //             );
-//             // // ---  Generate Special Covers ---
-//             // const logoUrl = process.env.COMPANY_LOGO_URL;
+
+//             // FRONT / BACK COVER + PDF
 //             const book = await StoryBookModel.findOne(
 //               { _id: book_id },
-//               { page_count: 1, title: 1 }
+//               { page_count: 1, title: 1 },
 //             );
 
-//             //  Front Cover (Last Page) - Canvas front cover
 //             if (parseInt(page_number) === book.page_count) {
-//               //  BackCover Generation
-//               const fixedBackCoverUrl = process.env.DEFAULT_BACK_COVER_URL;
-//               if (fixedBackCoverUrl) {
+//               // Back cover
+//               if (process.env.DEFAULT_BACK_COVER_URL) {
 //                 await AiKidImageModel.updateOne(
 //                   { req_id },
-//                   { $set: { back_cover_url: fixedBackCoverUrl } }
+//                   {
+//                     $set: {
+//                       back_cover_url: process.env.DEFAULT_BACK_COVER_URL,
+//                     },
+//                   },
 //                 );
-//                 console.log("✅ Assigned fixed back cover:", fixedBackCoverUrl);
 //               }
-//               console.log("Generating front cover (CANVAS)...");
 
-//               // Save original (non-captioned, non-margin) page to temp file
-//               const finalPageFileName = `last_page_${jobId}.jpg`;
-//               const finalPageLocalPath = `/tmp/${finalPageFileName}`;
-//               fs.writeFileSync(finalPageLocalPath, initialBuffer);
+//               // Upload last page
+//               const lastPagePath = `/tmp/${jobId}_last.jpg`;
+//               fs.writeFileSync(lastPagePath, initialBuffer);
 
-//               // Upload last page to S3
-//               const finalPageUpload = await uploadLocalFileToS3(
-//                 finalPageLocalPath,
-//                 `storybook_pages/${finalPageFileName}`,
-//                 "image/jpeg"
+//               const lastUpload = await uploadLocalFileToS3(
+//                 lastPagePath,
+//                 `storybook_pages/${jobId}_last.jpg`,
 //               );
 
-//               const lastPageUrl = finalPageUpload.Location;
-//               console.log("✅ Last page uploaded to S3:", lastPageUrl);
-
-//               // Generate front cover using Canvas (NEW HELPER)
-//               const frontCoverS3Url = await createFrontCoverCanvas(
-//                 lastPageUrl,
+//               // Front cover
+//               const frontCoverUrl = await createFrontCoverCanvas(
+//                 lastUpload.Location,
 //                 childName,
-//                 process.env.COMPANY_LOGO_URL, // send logo URL
-//                 book.title
+//                 process.env.COMPANY_LOGO_URL,
+//                 book.title,
 //               );
 
-//               // Save final front cover URL to DB
 //               await AiKidImageModel.updateOne(
 //                 { req_id },
-//                 { $set: { front_cover_url: frontCoverS3Url } }
+//                 { $set: { front_cover_url: frontCoverUrl } },
 //               );
 
-//               console.log("🎉 Final Front Cover Ready:", frontCoverS3Url);
-
-//               // ✅ NEW: Generate final PDF for this req_id
+//               // PDF generation
 //               try {
-//                 console.log("📄 Generating final PDF for:", req_id);
 //                 const pdfUrl = await generateStoryPdfForRequest(req_id);
-//                 console.log("📄 PDF generated at:", pdfUrl);
 
-//                 // ✅ Save pdf_url on ParentModel
 //                 const parent = await ParentModel.findOneAndUpdate(
 //                   { req_id },
 //                   { $set: { pdf_url: pdfUrl } },
-//                   { new: true }
+//                   {
+//                     new: true,
+//                     upsert: true, // ✅ THIS FIXES IT
+//                   },
 //                 );
-//                 // 🔔 Send PDF-ready email to parent automatically
-//                 if (parent?.email) {
+
+//                 if (parent?.email && !parent.pdf_email_sent) {
 //                   await sendMail(
 //                     req_id,
 //                     parent.name,
@@ -1132,81 +732,34 @@ export const getGeneratedImage = async (req, res) => {
 //                     book_id,
 //                     parent.email,
 //                     false,
-//                     true
+//                     true,
 //                   );
-//                   console.log("📩 PDF ready email sent to:", parent.email);
+
+//                   await ParentModel.updateOne(
+//                     { req_id },
+//                     { $set: { pdf_email_sent: true } },
+//                   );
 //                 }
 //               } catch (err) {
-//                 console.error("Error generating/sending PDF:", err);
-//               }
-//               // Cleanup
-//               try {
-//                 fs.unlinkSync(finalPageLocalPath);
-//               } catch (e) {
-//                 console.warn(
-//                   "Could not delete last page temp file:",
-//                   e.message
-//                 );
+//                 console.error("PDF / Email error:", err);
 //               }
 //             }
 
-//             // if (parseInt(page_number) === book.page_count) {
-//             //   console.log("Generating front cover (PLACID)...");
-
-//             //   // ✅ Use REMAKER ORIGINAL IMAGE (initialBuffer) NOT caption or margin image
-//             //   const finalPageFileName = `last_page_${jobId}.jpg`;
-//             //   const finalPageLocalPath = `/tmp/${finalPageFileName}`;
-//             //   fs.writeFileSync(finalPageLocalPath, initialBuffer);
-
-//             //   // ✅ Upload initialBuffer to S3
-//             //   const finalPageUpload = await uploadLocalFileToS3(
-//             //     finalPageLocalPath,
-//             //     `storybook_pages/${finalPageFileName}`,
-//             //     "image/jpeg"
-//             //   );
-//             //   const lastPageUrl = finalPageUpload.Location;
-//             //   console.log("✅ Last page uploaded to S3:", lastPageUrl);
-
-//             //   // ✅ Generate cover via Placid → then upload to S3 → return final S3 URL
-//             //   const frontCoverS3Url = await createFrontCoverWithCanvas(
-//             //     lastPageUrl,
-//             //     childName
-//             //   );
-
-//             //   // ✅ Save final front cover to DB
-//             //   await AiKidImageModel.updateOne(
-//             //     { req_id },
-//             //     { $set: { front_cover_url: frontCoverS3Url } }
-//             //   );
-
-//             //   fs.unlinkSync(finalPageLocalPath);
-//             //   console.log("🎉 Final Front Cover Ready:", frontCoverS3Url);
-//             // }
-
-//             // 7. Cleanup local files
-//             // try {
-//             fs.unlinkSync(captionLocalPath);
-//             //   fs.unlinkSync(marginLocalPath);
-//             // } catch (e) {
-//             //   console.warn("Could not clean up temporary files:", e);
-//             // }
-
-//             return; // finished, stop polling
+//             // Cleanup
+//             fs.unlinkSync(captionPath);
+//             fs.unlinkSync(marginPath);
+//             return;
 //           }
 
-//           // not completed yet -> schedule next poll
 //           pollWithBackoff(attempt + 1);
-//         } catch (pollErr) {
-//           console.error(
-//             "An error occurred during image processing or upload:",
-//             pollErr
-//           );
-//           // On any error, schedule a retry with backoff
+//         } catch (err) {
+//           console.error("Polling error:", err);
 //           pollWithBackoff(attempt + 1);
 //         }
 //       }, delay);
 //     })();
-//     return res.status(200).json({ job_id: data.result.job_id, ok: true });
+
+//     return res.status(200).json({ job_id: jobId, ok: true });
 //   } catch (error) {
 //     console.error("Error generating image:", error);
 //     res.status(500).json({ error: "Failed to generate image", ok: false });
@@ -1217,7 +770,7 @@ export const getGeneratedImage = async (req, res) => {
 export async function uploadLocalFileToS3(
   localFilePath,
   s3Key,
-  contentType = "image/jpeg"
+  contentType = "image/jpeg",
 ) {
   const fileContent = fs.readFileSync(localFilePath);
 
@@ -1239,7 +792,7 @@ async function pollFaceSwap(jobId) {
         Authorization: REMAKER_API_KEY,
         accept: "application/json",
       },
-    }
+    },
   );
   const data = await resp.json();
 
@@ -1267,7 +820,7 @@ export const checkGenerationStatus = async (req, res) => {
 
       const book = await StoryBookModel.findOne(
         { _id: book_id },
-        { page_count: 1 }
+        { page_count: 1 },
       );
 
       const next = page_number < book.page_count;
@@ -1305,7 +858,7 @@ export const updatePageImage = async (req, res) => {
         $set: {
           image_idx: image_id,
         },
-      }
+      },
     );
     res
       .status(200)
@@ -1324,7 +877,7 @@ export const createParentAndSendMail = async (req, res) => {
     const parentDeatil = await ParentModel.findOneAndUpdate(
       { req_id }, // filter
       { $setOnInsert: { name, email, kidName, req_id, notify } }, // only insert if not found
-      { upsert: true, new: true } // new: true returns the document
+      { upsert: true, new: true }, // new: true returns the document
     );
 
     // if (!notify) {
@@ -1335,7 +888,7 @@ export const createParentAndSendMail = async (req, res) => {
 
       await ParentModel.updateOne(
         { req_id },
-        { $set: { preview_email_sent: true } }
+        { $set: { preview_email_sent: true } },
       );
     }
 
@@ -1358,9 +911,10 @@ const sendMail = async (
   email,
   emailStatus = false,
   pdfReady = false,
-  pdfUrl = null // ✅ NEW
+  pdfUrl = null, // ✅ NEW
 ) => {
-  const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
+  // const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
+  const previewUrl = `http://localhost:5173/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
   let parent = await ParentModel.findOne({ req_id });
   pdfUrl = parent?.pdf_url || null;
   pdfReady = !!pdfUrl;
@@ -1389,11 +943,6 @@ const sendMail = async (
               background-color:#007BFF;color:white;
               text-decoration:none;font-weight:bold;border-radius:4px;
               margin:10px 0;">Preview Story Book</a>
-                <a href="${pdfUrl}" style="
-              display:inline-block;padding:12px 20px;
-              background-color:#007BFF;color:white;
-              text-decoration:none;font-weight:bold;border-radius:4px;
-              margin:10px 0;">Pdf Url</a>
           `
       }
 
