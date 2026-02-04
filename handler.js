@@ -11,7 +11,8 @@ import paymentRoute from "./src/routes/paymentRoute.js";
 const app = express();
 const corsOptions = {
   // origin: "https://storybookg.netlify.app",
-  origin: "http://localhost:5173",
+  origin: "https://superdad-frontend.onrender.com",
+  // origin: "http://localhost:5173",
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: [
     "Content-Type",
