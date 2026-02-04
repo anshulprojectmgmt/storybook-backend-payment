@@ -913,7 +913,7 @@ const sendMail = async (
   pdfReady = false,
   pdfUrl = null, // ✅ NEW
 ) => {
-  const previewUrl = `https://superdad-frontend.onrender.com/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
+  const previewUrl = `https://superdadd.netlify.app//preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
   // const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
   // const previewUrl = `http://localhost:5173/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
   let parent = await ParentModel.findOne({ req_id });
