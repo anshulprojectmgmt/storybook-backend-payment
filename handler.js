@@ -12,8 +12,8 @@ import checkoutRoutes from "./src/routes/checkout.js";
 const app = express();
 const corsOptions = {
   // origin: "https://storybookg.netlify.app",
-  // origin: "https://superdadd.netlify.app",
-  origin: "http://localhost:5173",
+  origin: "https://superdadd.netlify.app",
+  // origin: "http://localhost:5173",
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: [
     "Content-Type",
