@@ -7,12 +7,13 @@ import sceneRoute from "./src/routes/sceneRoute.js";
 import cors from "cors";
 import { mongooseConnection } from "./src/config/mongooseConfig.js";
 import paymentRoute from "./src/routes/paymentRoute.js";
+import checkoutRoutes from "./src/routes/checkout.js";
 
 const app = express();
 const corsOptions = {
   // origin: "https://storybookg.netlify.app",
-  origin: "https://superdadd.netlify.app",
-  // origin: "http://localhost:5173",
+  // origin: "https://superdadd.netlify.app",
+  origin: "http://localhost:5173",
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: [
     "Content-Type",
@@ -42,6 +43,7 @@ app.use("/api/photo", centralRoute);
 app.use("/api/storybook", storyBookRoute);
 app.use("/api/scene", sceneRoute);
 app.use("/api/payment", paymentRoute);
+app.use("/api/checkout", checkoutRoutes);
 
 app.use((req, res, next) => {
   return res.status(404).json({

@@ -218,7 +218,7 @@ async function addCaptionWithCanva(imageBuffer, captionText) {
 }
 
 export const getGeneratedImage = async (req, res) => {
-  const { req_id, page_number, book_id, childName } = req.query;
+  const { req_id, page_number, book_id } = req.query;
 
   try {
     const pageNum = parseInt(page_number);
@@ -237,6 +237,8 @@ export const getGeneratedImage = async (req, res) => {
         });
       }
     }
+    const parent = await ParentModel.findOne({ req_id });
+    const childName = parent?.kidName;
 
     /* =====================================================
        ♻️ STEP 2: RESUME GUARD (idempotent)
@@ -913,9 +915,9 @@ const sendMail = async (
   pdfReady = false,
   pdfUrl = null, // ✅ NEW
 ) => {
-  const previewUrl = `https://superdadd.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
+  // const previewUrl = `https://superdadd.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
   // const previewUrl = `https://storybookg.netlify.app/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
-  // const previewUrl = `http://localhost:5173/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
+  const previewUrl = `http://localhost:5173/preview?request_id=${req_id}&name=${kidName}&book_id=${book_id}&email=${emailStatus}`;
   let parent = await ParentModel.findOne({ req_id });
   pdfUrl = parent?.pdf_url || null;
   pdfReady = !!pdfUrl;

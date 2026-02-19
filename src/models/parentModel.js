@@ -1,10 +1,25 @@
 import mongoose from "mongoose";
 
+const addressSchema = new mongoose.Schema({
+  line1: String,
+  line2: String,
+  city: String,
+  state: String,
+  pincode: String,
+  country: String,
+});
+
 const parentSchema = new mongoose.Schema({
   name: {
     type: String,
     required: true,
   },
+  kidName: {
+    type: String,
+    required: true,
+  },
+  phone: String,
+  address: addressSchema,
   email: {
     type: String,
     required: true,
@@ -16,6 +31,7 @@ const parentSchema = new mongoose.Schema({
   req_id: {
     type: String,
     required: true,
+    unique: true,
   },
   payment: {
     type: String,
@@ -32,7 +48,12 @@ const parentSchema = new mongoose.Schema({
   },
   preview_email_sent: { type: Boolean, default: false },
   pdf_email_sent: { type: Boolean, default: false },
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  },
+  // timestamps: true,
 });
 
-const ParentMode = mongoose.model("Parent", parentSchema);
-export default ParentMode;
+const parentModel = mongoose.model("Parent", parentSchema);
+export default parentModel;
