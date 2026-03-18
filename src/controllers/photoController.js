@@ -218,7 +218,7 @@ async function addCaptionWithCanva(imageBuffer, captionText) {
 }
 
 export const getGeneratedImage = async (req, res) => {
-  const { req_id, page_number, book_id } = req.query;
+  const { req_id, page_number, book_id, childName: frontendName } = req.query;
 
   try {
     const pageNum = parseInt(page_number);
@@ -238,7 +238,7 @@ export const getGeneratedImage = async (req, res) => {
       }
     }
     const parent = await ParentModel.findOne({ req_id });
-    const childName = parent?.kidName;
+    const childName = frontendName || parent?.kidName || "Your child";
 
     /* =====================================================
        ♻️ STEP 2: RESUME GUARD (idempotent)
