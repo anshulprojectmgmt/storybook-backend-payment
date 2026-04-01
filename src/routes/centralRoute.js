@@ -5,6 +5,7 @@ import {
   getGeneratedImage,
   checkGenerationStatus,
   updatePageImage,
+  generateFinalPdf,
   createParentAndSendMail,
 } from "../controllers/photoController.js";
 import upload from "../middlewares/uploadMiddleware.js";
@@ -20,6 +21,7 @@ centralRoute.post(
 
 centralRoute.post("/add_photo_to_queue", add_photoToDB);
 centralRoute.post("/update_image", updatePageImage);
+centralRoute.post("/generate_final_pdf", generateFinalPdf);
 centralRoute.post("/send_preview", createParentAndSendMail);
 
 centralRoute.get("/get_all_pages", getAllBookPages);

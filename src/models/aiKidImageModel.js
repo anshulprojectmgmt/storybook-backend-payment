@@ -1,8 +1,42 @@
 import mongoose from "mongoose";
 
+const imageOptionSchema = new mongoose.Schema(
+  {
+    option_idx: {
+      type: Number,
+      default: 0,
+    },
+    job_id: {
+      type: String,
+      default: null,
+    },
+    preview_url: {
+      type: String,
+      default: null,
+    },
+    raw_url: {
+      type: String,
+      default: null,
+    },
+    print_url: {
+      type: String,
+      default: null,
+    },
+    source_image_url: {
+      type: String,
+      default: null,
+    },
+  },
+  { _id: false },
+);
+
 const aiKidImageSchema = new mongoose.Schema({
   req_id: { type: String, required: true },
   job_id: { type: String, required: true },
+  job_ids: {
+    type: [String],
+    default: [],
+  },
   book_id: { type: mongoose.Schema.Types.ObjectId, ref: "StoryBookModel" },
   page_number: { type: Number, required: true },
 
@@ -16,6 +50,11 @@ const aiKidImageSchema = new mongoose.Schema({
   image_urls: {
     type: [String],
     default: null,
+  },
+
+  image_options: {
+    type: [imageOptionSchema],
+    default: [],
   },
 
   image_idx: {

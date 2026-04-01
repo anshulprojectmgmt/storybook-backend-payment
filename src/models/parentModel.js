@@ -42,6 +42,19 @@ const parentSchema = new mongoose.Schema({
     type: String,
     default: null,
   },
+  final_pdf_status: {
+    type: String,
+    enum: ["not_ready", "selection_ready", "generating", "ready", "failed"],
+    default: "not_ready",
+  },
+  auto_generate_pdf_at: {
+    type: Date,
+    default: null,
+  },
+  final_book_ready_at: {
+    type: Date,
+    default: null,
+  },
   notify: {
     type: Boolean,
     default: false, // Default to false to send email notifications

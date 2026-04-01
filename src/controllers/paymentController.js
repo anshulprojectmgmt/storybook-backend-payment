@@ -1,6 +1,7 @@
 import Razorpay from "razorpay";
 import crypto from "crypto";
 import ParentModel from "../models/parentModel.js";
+import { maybeGenerateFinalPdfIfDue } from "./photoController.js";
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -122,11 +123,33 @@ export const getPaymentStatus = async (req, res) => {
       return res.status(400).json({ ok: false });
     }
 
-    const parent = await ParentModel.findOne({ req_id }, { payment: 1 });
+    await maybeGenerateFinalPdfIfDue(req_id);
+
+    const parent = await ParentModel.findOne(
+      { req_id },
+      {
+        payment: 1,
+        preview_email_sent: 1,
+        pdf_url: 1,
+        notify: 1,
+        final_pdf_status: 1,
+        auto_generate_pdf_at: 1,
+        final_book_ready_at: 1,
+      },
+    );
 
     return res.status(200).json({
       ok: true,
       paid: parent?.payment === "paid",
+      preview_email_sent: Boolean(parent?.preview_email_sent),
+      pdf_url: parent?.pdf_url || null,
+      pdf_ready: Boolean(parent?.pdf_url),
+      final_pdf_status: parent?.pdf_url
+        ? "ready"
+        : parent?.final_pdf_status || "not_ready",
+      auto_generate_pdf_at: parent?.auto_generate_pdf_at || null,
+      final_book_ready_at: parent?.final_book_ready_at || null,
+      notify: Boolean(parent?.notify),
     });
   } catch (err) {
     return res.status(500).json({ ok: false });
