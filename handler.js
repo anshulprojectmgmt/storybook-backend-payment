@@ -13,7 +13,7 @@ const app = express();
 const corsOptions = {
   // origin: "https://storybookg.netlify.app",
   // origin: "https://superdadd.netlify.app",
-  origin: "https://storybook.superdad.tech/",
+  origin: "https://storybook.superdad.tech",
   // origin: "http://localhost:5173",
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: [
